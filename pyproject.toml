@@ -1,0 +1,25 @@
+[project]
+name = "redrob-ranker"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bm25s==0.1.5",
+    "einops>=0.8.2",
+    "en-core-web-sm",
+    "faiss-cpu==1.8.0",
+    "numpy==1.26.4",
+    "onnxruntime==1.17.1",
+    "optimum==1.17.1",
+    "pandas==2.2.0",
+    "scipy==1.12.0",
+    "sentence-transformers>=2.4.0",
+    "spacy==3.7.2",
+    "torch==2.2.1",
+    "tqdm==4.66.1",
+    "transformers==4.38.2",
+]
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl" }
