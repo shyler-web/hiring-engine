@@ -6,7 +6,8 @@ __pycache__/
 candidates.jsonl.gz
 sample_candidates.json
 sample_candidates.jsonl
-candidates.jsonl
+candidates.jsonl.gz
 test_submission.csv
 reports
 report
+output
