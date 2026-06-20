@@ -5,9 +5,11 @@ __pycache__/
 .env
 candidates.jsonl.gz
 sample_candidates.json
-sample_candidates.jsonl
 candidates.jsonl.gz
 test_submission.csv
 reports
 report
 output
+output_analysis.zip
+artifacts_old
+artifacts_test_new

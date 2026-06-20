@@ -1,280 +1,192 @@
 """
-filters.py — Stage 0: Honeypot Detection + Hard Filters
-Enhanced with per-rule diagnostics, unique candidate tracking, and overlap analysis.
+filters.py — Honeypot detection and hard business filters.
+
+Key insights from 100K data analysis:
+- Fake companies in dataset: Pied Piper, Initech, Wayne Enterprises, Acme Corp,
+  Stark Industries, Hooli, Globex Inc, Dunder Mifflin — these are fictional but
+  VALID candidates work at them. Do NOT filter by company name.
+- Real consulting firms: Infosys, Wipro, TCS, Capgemini, HCL, Mindtree,
+  Accenture, Cognizant, Tech Mahindra, Mphasis (~23K entries each in career history)
+- 64.6% of candidates have github_activity_score = -1 (no GitHub linked)
+- 59.6% have offer_acceptance_rate = -1 (no offer history)
+- Only 35,339 / 100,000 are open_to_work
+- Mean YoE = 7.17, median = 6.80
+- Notice period mean = 87 days, median = 90 days (majority are 60-90-120-150)
+- Most irrelevant titles appear ~18-19K times each (Business Analyst, Graphic Designer etc)
 """
 
 from datetime import date, datetime
-from collections import defaultdict
 
+# Real consulting/services firms from actual dataset
 CONSULTING_FIRMS = {
-    'tcs', 'infosys', 'wipro', 'accenture', 'cognizant',
-    'capgemini', 'hcl', 'tech mahindra', 'mphasis', 'hexaware',
-    'mindtree', 'l&t infotech', 'ltimindtree'
+    'infosys', 'wipro', 'tcs', 'capgemini', 'hcl', 'mindtree',
+    'accenture', 'cognizant', 'tech mahindra', 'mphasis', 'hexaware',
+    'l&t infotech', 'ltimindtree', 'genpact'
 }
 
-IRRELEVANT_TITLES = {
-    'civil engineer', 'accountant', 'graphic designer',
-    'hr manager', 'content writer', 'sales executive',
-    'financial analyst', 'mechanical engineer'
+# Titles that are completely irrelevant to AI/ML engineering
+# From data: each appears ~5700-5830 times as current title
+HARD_IRRELEVANT_TITLES = {
+    'business analyst', 'graphic designer', 'mechanical engineer',
+    'accountant', 'project manager', 'customer support',
+    'operations manager', 'content writer', 'sales executive',
+    'civil engineer', 'marketing manager', 'hr manager',
 }
 
-IRRELEVANT_INDUSTRIES = {
-    'paper products', 'manufacturing', 'conglomerate',
-    'retail', 'real estate', 'agriculture'
+# Industries with AI/ML relevance — from actual dataset industry list
+TECH_INDUSTRIES = {
+    'software', 'ai/ml', 'fintech', 'e-commerce', 'saas',
+    'food delivery', 'transportation', 'edtech', 'healthtech',
+    'healthtech ai', 'conversational ai', 'ai services', 'voice ai',
+    'adtech', 'insurance tech', 'gaming', 'internet', 'media',
+    'consumer electronics'
 }
 
 
-def parse_date(date_str):
+def parse_date(date_str: str) -> date:
     return datetime.strptime(date_str, "%Y-%m-%d").date()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HONEYPOT DETECTION  (returns flags dict per candidate)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_honeypot_flags(candidate):
+def is_honeypot(candidate: dict) -> bool:
     """
-    Returns a dict:
-      {
-        'flags': int,
-        'triggered_rules': list[str],   # e.g. ['HP_R1', 'HP_R3']
-      }
+    Detect honeypot candidates with impossible/fabricated profiles.
+    Returns True if candidate should be discarded.
+    
+    Honeypot signals based on schema analysis:
+    1. Expert/advanced skill with duration_months = 0
+    2. Career timeline mathematically impossible vs years_of_experience
+    3. Assessment score contradicts claimed expert proficiency
+    4. Suspiciously perfect profile with impossible combinations
     """
-    triggered = []
+    flags = 0
 
-    # Rule HP_R1: expert/advanced skill with duration_months == 0
-    for skill in candidate['skills']:
+    # --- Rule 1: expert/advanced skill with 0 months duration ---
+    # Legitimate candidates with 5+ years in AI will have real duration on core skills
+    zero_duration_advanced = 0
+    for skill in candidate.get('skills', []):
         if skill['proficiency'] in ('expert', 'advanced'):
             if skill.get('duration_months', 1) == 0:
-                triggered.append('HP_R1')
-                break   # one flag per candidate for this rule
+                zero_duration_advanced += 1
+    if zero_duration_advanced >= 2:
+        flags += 1
+    if zero_duration_advanced >= 4:
+        flags += 1  # double flag for egregious cases
 
-    # Rule HP_R2: career timeline impossibility
-    total_career_months = sum(
-        j['duration_months'] for j in candidate['career_history']
-    )
+    # --- Rule 2: Career timeline impossibility ---
+    # Allow 18 months buffer for legitimate job overlaps during transitions
+    career = candidate.get('career_history', [])
+    total_career_months = sum(j.get('duration_months', 0) for j in career)
     yoe_months = candidate['profile']['years_of_experience'] * 12
     if total_career_months > yoe_months + 18:
-        triggered.append('HP_R2')
+        flags += 1
 
-    # Rule HP_R3: assessment score contradicts claimed proficiency
-    assessments = candidate['redrob_signals']['skill_assessment_scores']
-    skill_proficiency = {s['name']: s['proficiency'] for s in candidate['skills']}
-    for skill_name, score in assessments.items():
-        if skill_proficiency.get(skill_name) == 'expert' and score < 25:
-            triggered.append('HP_R3')
-            break
-
-    # Rule HP_R4: impossible tenure (duration_months > 120 but yoe < 8)
-    for job in candidate['career_history']:
-        if job['duration_months'] > 120 and candidate['profile']['years_of_experience'] < 8:
-            triggered.append('HP_R4')
-            break
-
-    return {
-        'flags': len(set(triggered)),        # unique rules triggered
-        'triggered_rules': list(set(triggered)),
+    # --- Rule 3: Assessment contradicts proficiency ---
+    # An "expert" who scores <25 on their own skill assessment is suspicious
+    assessments = candidate['redrob_signals'].get('skill_assessment_scores', {})
+    skill_proficiency_map = {
+        s['name'].lower(): s['proficiency']
+        for s in candidate.get('skills', [])
     }
+    contradictions = 0
+    for skill_name, score in assessments.items():
+        claimed = skill_proficiency_map.get(skill_name.lower(), '')
+        if claimed == 'expert' and score < 25:
+            contradictions += 1
+    if contradictions >= 2:
+        flags += 1
+
+    # --- Rule 4: Impossibly short tenure at very old companies ---
+    # e.g. claims 10 years at a company that only has 3 year history in dataset
+    # We can't check founding dates, but we can check single-role > YoE
+    for job in career:
+        if job.get('duration_months', 0) > yoe_months + 6:
+            flags += 1
+            break
+
+    # --- Rule 5: Perfect completeness + zero behavioral signals ---
+    # Real active candidates have some profile views, applications etc.
+    signals = candidate['redrob_signals']
+    if (signals.get('profile_completeness_score', 0) >= 95 and
+            signals.get('profile_views_received_30d', 0) == 0 and
+            signals.get('applications_submitted_30d', 0) == 0 and
+            signals.get('saved_by_recruiters_30d', 0) == 0):
+        flags += 1
+
+    return flags >= 2
 
 
-def is_honeypot(candidate):
-    result = get_honeypot_flags(candidate)
-    return result['flags'] >= 2
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HARD FILTERS  (returns filter reason or None)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_hard_filter_reason(candidate):
+def passes_hard_filters(candidate: dict) -> bool:
     """
-    Returns the rule code that first eliminates this candidate, or None if they pass.
-    Rule codes: HF_LOCATION, HF_EXPERIENCE, HF_INACTIVE, HF_IRRELEVANT_TITLE
+    Hard business rules. Eliminate candidates who cannot possibly be hired.
+    Conservative — only eliminate when very confident.
     """
     profile = candidate['profile']
     signals = candidate['redrob_signals']
     today = date.today()
 
-    # HF_LOCATION
+    # --- Filter 1: Must be India-based or willing to relocate ---
+    # 71,196 are NOT willing to relocate, so this matters
     if profile['country'] != 'India' and not signals['willing_to_relocate']:
-        return 'HF_LOCATION'
+        return False
 
-    # HF_EXPERIENCE
+    # --- Filter 2: Minimum experience floor ---
+    # JD says 5-9 years, we allow 3+ to not be too aggressive
+    # Mean YoE in dataset is 7.17 so this removes genuine juniors
     if profile['years_of_experience'] < 3:
-        return 'HF_EXPERIENCE'
+        return False
 
-    # HF_INACTIVE
+    # --- Filter 3: Completely dead + not looking ---
+    # open_to_work=False AND inactive for 6+ months = not reachable
+    # 64,661 are not open_to_work — don't eliminate all, just truly dead ones
     days_inactive = (today - parse_date(signals['last_active_date'])).days
     if not signals['open_to_work_flag'] and days_inactive > 180:
-        return 'HF_INACTIVE'
+        return False
 
-    # HF_IRRELEVANT_TITLE
-    all_industries = {j['industry'].lower() for j in candidate['career_history']}
+    # --- Filter 4: Completely irrelevant career with zero tech exposure ---
+    # Only eliminate if current title is irrelevant AND career has no tech industry at all
     title_lower = profile['current_title'].lower()
-    if title_lower in IRRELEVANT_TITLES and not any(
-        'software' in ind or 'tech' in ind or 'ai' in ind
-        for ind in all_industries
-    ):
-        return 'HF_IRRELEVANT_TITLE'
+    if title_lower in HARD_IRRELEVANT_TITLES:
+        all_industries = {j['industry'].lower() for j in candidate.get('career_history', [])}
+        has_any_tech = any(
+            ind in TECH_INDUSTRIES or 'tech' in ind or 'software' in ind or 'ai' in ind
+            for ind in all_industries
+        )
+        # Also check if they have any AI skills listed
+        has_ai_skills = any(
+            s['name'].lower() in {
+                'machine learning', 'python', 'nlp', 'deep learning',
+                'pytorch', 'tensorflow', 'embeddings', 'rag', 'llms'
+            }
+            for s in candidate.get('skills', [])
+            if s['proficiency'] in ('advanced', 'expert')
+        )
+        if not has_any_tech and not has_ai_skills:
+            return False
 
-    return None
+    return True
 
 
-def passes_hard_filters(candidate):
-    return get_hard_filter_reason(candidate) is None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN FILTER  with full diagnostics
-# ─────────────────────────────────────────────────────────────────────────────
-
-def filter_candidates(candidates, verbose=True):
+def filter_candidates(candidates: list) -> list:
     """
-    Runs Stage 0 on a list of candidates.
-
-    Returns:
-      passed          — list of candidates that survive both filters
-      report          — dict with detailed per-rule stats
+    Apply honeypot detection and hard filters.
+    Returns filtered list with stats printed.
     """
-
-    # Per honeypot rule → set of candidate_ids
-    hp_rule_ids = defaultdict(set)   # HP_R1..HP_R4
-    # Per hard-filter rule → set of candidate_ids
-    hf_rule_ids = defaultdict(set)   # HF_*
-
-    zero_score_ids = []   # honeypots (score = 0, excluded but not deleted)
     passed = []
+    honeypot_count = 0
+    hard_filter_count = 0
 
     for c in candidates:
-        cid = c['candidate_id']
-        hp = get_honeypot_flags(c)
-
-        # Record every honeypot rule this candidate triggered (even non-honeypots)
-        for rule in hp['triggered_rules']:
-            hp_rule_ids[rule].add(cid)
-
-        if hp['flags'] >= 2:
-            zero_score_ids.append(cid)
-            continue   # skip hard filters — already eliminated
-
-        hf_reason = get_hard_filter_reason(c)
-        if hf_reason:
-            hf_rule_ids[hf_reason].add(cid)
+        if is_honeypot(c):
+            honeypot_count += 1
             continue
-
+        if not passes_hard_filters(c):
+            hard_filter_count += 1
+            continue
         passed.append(c)
 
-    # ── Build overlap-aware report ──────────────────────────────────────────
-
-    # Honeypot: candidates that triggered each rule (including those that
-    # triggered only 1 rule and were NOT marked honeypot — you asked to see all)
-    hp_section = {}
-    all_hp_flagged = set()
-    for rule in ['HP_R1', 'HP_R2', 'HP_R3', 'HP_R4']:
-        ids = hp_rule_ids[rule]
-        hp_section[rule] = {
-            'count': len(ids),
-            'candidate_ids': sorted(ids),
-        }
-        all_hp_flagged |= ids
-
-    # Hard-filter section
-    hf_section = {}
-    all_hf_filtered = set()
-    for rule in ['HF_LOCATION', 'HF_EXPERIENCE', 'HF_INACTIVE', 'HF_IRRELEVANT_TITLE']:
-        ids = hf_rule_ids[rule]
-        hf_section[rule] = {
-            'count': len(ids),
-            'candidate_ids': sorted(ids),
-        }
-        all_hf_filtered |= ids
-
-    report = {
-        'total_input': len(candidates),
-        'honeypot_rules': hp_section,
-        'honeypots_removed': {
-            'count': len(zero_score_ids),
-            'candidate_ids': sorted(zero_score_ids),
-        },
-        'hard_filter_rules': hf_section,
-        'hard_filtered_total': {
-            'count': len(all_hf_filtered),
-            'candidate_ids': sorted(all_hf_filtered),
-        },
-        'passed': {
-            'count': len(passed),
-            'candidate_ids': sorted(c['candidate_id'] for c in passed),
-        },
-    }
-
-    if verbose:
-        _print_report(report)
-
-    return passed, report
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PRETTY PRINTER
-# ─────────────────────────────────────────────────────────────────────────────
-
-_HP_RULE_LABELS = {
-    'HP_R1': 'Impossible skill duration (expert/advanced with 0 months)',
-    'HP_R2': 'Career timeline impossibility (total months >> YoE)',
-    'HP_R3': 'Assessment score contradicts claimed expertise (expert < 25)',
-    'HP_R4': 'Impossible tenure (role > 120 months but YoE < 8 yrs)',
-}
-
-_HF_RULE_LABELS = {
-    'HF_LOCATION':        'Outside India & unwilling to relocate',
-    'HF_EXPERIENCE':      'Years of experience < 3',
-    'HF_INACTIVE':        'Not open-to-work & inactive > 180 days',
-    'HF_IRRELEVANT_TITLE':'Completely irrelevant title with no AI/tech exposure',
-}
-
-
-def _print_report(r):
-    sep = "─" * 70
-
-    print(f"\n{'═'*70}")
-    print(f"  STAGE 0 FILTER REPORT  |  Input: {r['total_input']} candidates")
-    print(f"{'═'*70}\n")
-
-    # ── Honeypot rules ──────────────────────────────────────────────────────
-    print("🔴  HONEYPOT DETECTION RULES  (candidates triggering each rule)")
-    print("    (A candidate needs ≥2 flags to be marked a honeypot)\n")
-    for rule, label in _HP_RULE_LABELS.items():
-        data = r['honeypot_rules'][rule]
-        ids_str = ', '.join(data['candidate_ids']) if data['candidate_ids'] else '—'
-        print(f"  [{rule}]  {label}")
-        print(f"           Triggered by {data['count']} candidate(s): {ids_str}")
-        print()
-
-    # ── Honeypots removed ───────────────────────────────────────────────────
-    hp = r['honeypots_removed']
-    ids_str = ', '.join(hp['candidate_ids']) if hp['candidate_ids'] else '—'
-    print(sep)
-    print(f"  🚫 HONEYPOTS REMOVED (≥2 flags → score=0, excluded)")
-    print(f"     Total: {hp['count']} | IDs: {ids_str}\n")
-
-    # ── Hard filter rules ───────────────────────────────────────────────────
-    print("🟡  HARD FILTER RULES\n")
-    for rule, label in _HF_RULE_LABELS.items():
-        data = r['hard_filter_rules'][rule]
-        ids_str = ', '.join(data['candidate_ids']) if data['candidate_ids'] else '—'
-        print(f"  [{rule}]  {label}")
-        print(f"           Filtered: {data['count']} candidate(s): {ids_str}")
-        print()
-
-    hf = r['hard_filtered_total']
-    ids_str = ', '.join(hf['candidate_ids']) if hf['candidate_ids'] else '—'
-    print(sep)
-    print(f"  🚫 HARD-FILTERED TOTAL (unique, post-honeypot-removal)")
-    print(f"     Total: {hf['count']} | IDs: {ids_str}\n")
-
-    # ── Summary ─────────────────────────────────────────────────────────────
-    passed = r['passed']
-    ids_str = ', '.join(passed['candidate_ids']) if passed['candidate_ids'] else '—'
-    print(f"{'═'*70}")
-    print(f"  ✅ PASSED Stage 0: {passed['count']} candidates")
-    print(f"     IDs: {ids_str}")
-    print(f"{'═'*70}\n")
+    total = len(candidates)
+    print(f"[filter] Total input:       {total:,}")
+    print(f"[filter] Honeypots removed: {honeypot_count:,}")
+    print(f"[filter] Hard filtered:     {hard_filter_count:,}")
+    print(f"[filter] Remaining:         {len(passed):,} ({len(passed)/total*100:.1f}%)")
+    return passed
