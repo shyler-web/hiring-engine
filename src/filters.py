@@ -1,31 +1,37 @@
 """
 filters.py — Honeypot detection and hard business filters.
 
+V2 changes vs V1:
+  - Added fictional company filter (>50% career months at Dunder Mifflin etc.)
+  - Added DROP_TEMPLATES support: candidates whose current JD fingerprint
+    maps to Templates #1-15 (irrelevant) are dropped early.
+    NOTE: This is called from rank.py after template_map is loaded,
+    not inside filter_candidates() itself, because filter_candidates()
+    runs before template_map is available. The fictional company check
+    IS included here since it only needs the candidate dict.
+
 Key insights from 100K data analysis:
 - Fake companies in dataset: Pied Piper, Initech, Wayne Enterprises, Acme Corp,
-  Stark Industries, Hooli, Globex Inc, Dunder Mifflin — these are fictional but
-  VALID candidates work at them. Do NOT filter by company name.
+  Stark Industries, Hooli, Globex Inc, Dunder Mifflin — these appear as
+  employers. Candidates who spent >50% of their career at these are bots.
 - Real consulting firms: Infosys, Wipro, TCS, Capgemini, HCL, Mindtree,
-  Accenture, Cognizant, Tech Mahindra, Mphasis (~23K entries each in career history)
+  Accenture, Cognizant, Tech Mahindra, Mphasis (~23K entries each)
 - 64.6% of candidates have github_activity_score = -1 (no GitHub linked)
 - 59.6% have offer_acceptance_rate = -1 (no offer history)
 - Only 35,339 / 100,000 are open_to_work
 - Mean YoE = 7.17, median = 6.80
-- Notice period mean = 87 days, median = 90 days (majority are 60-90-120-150)
-- Most irrelevant titles appear ~18-19K times each (Business Analyst, Graphic Designer etc)
+- Notice period mean = 87 days, median = 90 days
+- Most irrelevant titles appear ~18-19K times each
 """
 
 from datetime import date, datetime
 
-# Real consulting/services firms from actual dataset
 CONSULTING_FIRMS = {
     'infosys', 'wipro', 'tcs', 'capgemini', 'hcl', 'mindtree',
     'accenture', 'cognizant', 'tech mahindra', 'mphasis', 'hexaware',
     'l&t infotech', 'ltimindtree', 'genpact'
 }
 
-# Titles that are completely irrelevant to AI/ML engineering
-# From data: each appears ~5700-5830 times as current title
 HARD_IRRELEVANT_TITLES = {
     'business analyst', 'graphic designer', 'mechanical engineer',
     'accountant', 'project manager', 'customer support',
@@ -33,7 +39,6 @@ HARD_IRRELEVANT_TITLES = {
     'civil engineer', 'marketing manager', 'hr manager',
 }
 
-# Industries with AI/ML relevance — from actual dataset industry list
 TECH_INDUSTRIES = {
     'software', 'ai/ml', 'fintech', 'e-commerce', 'saas',
     'food delivery', 'transportation', 'edtech', 'healthtech',
@@ -42,38 +47,61 @@ TECH_INDUSTRIES = {
     'consumer electronics'
 }
 
+# Fictional companies used as synthetic filler in dataset.
+# Candidates whose career is >50% at these are bots/honeypots.
+FICTIONAL_COMPANIES = {
+    'pied piper', 'initech', 'wayne enterprises', 'acme corp',
+    'stark industries', 'hooli', 'globex inc', 'dunder mifflin'
+}
+
 
 def parse_date(date_str: str) -> date:
     return datetime.strptime(date_str, "%Y-%m-%d").date()
+
+
+def _fictional_career_ratio(candidate: dict) -> float:
+    """
+    Return the fraction of career months spent at fictional companies.
+    Used by both is_honeypot() (as a flag) and passes_hard_filters() (as a cut).
+    """
+    career = candidate.get('career_history', [])
+    total = sum(j.get('duration_months', 0) for j in career)
+    if total == 0:
+        return 0.0
+    fictional = sum(
+        j.get('duration_months', 0) for j in career
+        if j.get('company', '').lower() in FICTIONAL_COMPANIES
+    )
+    return fictional / total
 
 
 def is_honeypot(candidate: dict) -> bool:
     """
     Detect honeypot candidates with impossible/fabricated profiles.
     Returns True if candidate should be discarded.
-    
-    Honeypot signals based on schema analysis:
-    1. Expert/advanced skill with duration_months = 0
-    2. Career timeline mathematically impossible vs years_of_experience
-    3. Assessment score contradicts claimed expert proficiency
-    4. Suspiciously perfect profile with impossible combinations
+
+    Rules:
+      1. Expert/advanced skill with duration_months = 0
+      2. Career timeline mathematically impossible vs years_of_experience
+      3. Assessment score contradicts claimed expert proficiency
+      4. Single job duration > total YoE
+      5. Perfect completeness + zero behavioral signals
+      6. >50% of career at fictional companies (new in V2)
     """
     flags = 0
 
     # --- Rule 1: expert/advanced skill with 0 months duration ---
-    # Legitimate candidates with 5+ years in AI will have real duration on core skills
-    zero_duration_advanced = 0
-    for skill in candidate.get('skills', []):
-        if skill['proficiency'] in ('expert', 'advanced'):
-            if skill.get('duration_months', 1) == 0:
-                zero_duration_advanced += 1
+    zero_duration_advanced = sum(
+        1 for s in candidate.get('skills', [])
+        if s['proficiency'] in ('expert', 'advanced')
+        and s.get('duration_months', 1) == 0
+    )
     if zero_duration_advanced >= 2:
         flags += 1
     if zero_duration_advanced >= 4:
         flags += 1  # double flag for egregious cases
 
     # --- Rule 2: Career timeline impossibility ---
-    # Allow 18 months buffer for legitimate job overlaps during transitions
     career = candidate.get('career_history', [])
     total_career_months = sum(j.get('duration_months', 0) for j in career)
     yoe_months = candidate['profile']['years_of_experience'] * 12
@@ -81,36 +109,37 @@ def is_honeypot(candidate: dict) -> bool:
         flags += 1
 
     # --- Rule 3: Assessment contradicts proficiency ---
-    # An "expert" who scores <25 on their own skill assessment is suspicious
     assessments = candidate['redrob_signals'].get('skill_assessment_scores', {})
     skill_proficiency_map = {
         s['name'].lower(): s['proficiency']
         for s in candidate.get('skills', [])
     }
-    contradictions = 0
-    for skill_name, score in assessments.items():
-        claimed = skill_proficiency_map.get(skill_name.lower(), '')
-        if claimed == 'expert' and score < 25:
-            contradictions += 1
+    contradictions = sum(
+        1 for skill_name, score in assessments.items()
+        if skill_proficiency_map.get(skill_name.lower(), '') == 'expert'
+        and score < 25
+    )
     if contradictions >= 2:
         flags += 1
 
-    # --- Rule 4: Impossibly short tenure at very old companies ---
-    # e.g. claims 10 years at a company that only has 3 year history in dataset
-    # We can't check founding dates, but we can check single-role > YoE
+    # --- Rule 4: Single job duration > total YoE ---
     for job in career:
         if job.get('duration_months', 0) > yoe_months + 6:
             flags += 1
             break
 
     # --- Rule 5: Perfect completeness + zero behavioral signals ---
-    # Real active candidates have some profile views, applications etc.
     signals = candidate['redrob_signals']
     if (signals.get('profile_completeness_score', 0) >= 95 and
             signals.get('profile_views_received_30d', 0) == 0 and
             signals.get('applications_submitted_30d', 0) == 0 and
             signals.get('saved_by_recruiters_30d', 0) == 0):
         flags += 1
+
+    # --- Rule 6 (NEW): Majority fictional career ---
+    # >50% of career at Dunder Mifflin / Pied Piper etc. → almost certainly a bot
+    if _fictional_career_ratio(candidate) > 0.5:
+        flags += 2  # Strong signal — double flag immediately
 
     return flags >= 2
 
@@ -125,25 +154,20 @@ def passes_hard_filters(candidate: dict) -> bool:
     today = date.today()
 
     # --- Filter 1: Must be India-based or willing to relocate ---
-    # 71,196 are NOT willing to relocate, so this matters
     if profile['country'] != 'India' and not signals['willing_to_relocate']:
         return False
 
     # --- Filter 2: Minimum experience floor ---
     # JD says 5-9 years, we allow 3+ to not be too aggressive
-    # Mean YoE in dataset is 7.17 so this removes genuine juniors
     if profile['years_of_experience'] < 3:
         return False
 
     # --- Filter 3: Completely dead + not looking ---
-    # open_to_work=False AND inactive for 6+ months = not reachable
-    # 64,661 are not open_to_work — don't eliminate all, just truly dead ones
     days_inactive = (today - parse_date(signals['last_active_date'])).days
     if not signals['open_to_work_flag'] and days_inactive > 180:
         return False
 
     # --- Filter 4: Completely irrelevant career with zero tech exposure ---
-    # Only eliminate if current title is irrelevant AND career has no tech industry at all
     title_lower = profile['current_title'].lower()
     if title_lower in HARD_IRRELEVANT_TITLES:
         all_industries = {j['industry'].lower() for j in candidate.get('career_history', [])}
@@ -151,7 +175,6 @@ def passes_hard_filters(candidate: dict) -> bool:
             ind in TECH_INDUSTRIES or 'tech' in ind or 'software' in ind or 'ai' in ind
             for ind in all_industries
         )
-        # Also check if they have any AI skills listed
         has_ai_skills = any(
             s['name'].lower() in {
                 'machine learning', 'python', 'nlp', 'deep learning',
@@ -162,6 +185,12 @@ def passes_hard_filters(candidate: dict) -> bool:
         )
         if not has_any_tech and not has_ai_skills:
             return False
+
+    # --- Filter 5 (NEW): Majority fictional career ---
+    # Redundant with is_honeypot Rule 6 but acts as a safety net
+    # in case honeypot flags didn't fire (e.g. clean behavioral signals on a bot)
+    if _fictional_career_ratio(candidate) > 0.5:
+        return False
 
     return True
 
