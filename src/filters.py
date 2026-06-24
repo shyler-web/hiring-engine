@@ -1,221 +1,296 @@
-"""
-filters.py — Honeypot detection and hard business filters.
+# filters.py - Honeypot detection and hard business filters.
 
-V2 changes vs V1:
-  - Added fictional company filter (>50% career months at Dunder Mifflin etc.)
-  - Added DROP_TEMPLATES support: candidates whose current JD fingerprint
-    maps to Templates #1-15 (irrelevant) are dropped early.
-    NOTE: This is called from rank.py after template_map is loaded,
-    not inside filter_candidates() itself, because filter_candidates()
-    runs before template_map is available. The fictional company check
-    IS included here since it only needs the candidate dict.
+import re
+import pickle
+import gzip
+import json
+from pathlib import Path
+from collections import Counter
+from datetime import datetime, date
 
-Key insights from 100K data analysis:
-- Fake companies in dataset: Pied Piper, Initech, Wayne Enterprises, Acme Corp,
-  Stark Industries, Hooli, Globex Inc, Dunder Mifflin — these appear as
-  employers. Candidates who spent >50% of their career at these are bots.
-- Real consulting firms: Infosys, Wipro, TCS, Capgemini, HCL, Mindtree,
-  Accenture, Cognizant, Tech Mahindra, Mphasis (~23K entries each)
-- 64.6% of candidates have github_activity_score = -1 (no GitHub linked)
-- 59.6% have offer_acceptance_rate = -1 (no offer history)
-- Only 35,339 / 100,000 are open_to_work
-- Mean YoE = 7.17, median = 6.80
-- Notice period mean = 87 days, median = 90 days
-- Most irrelevant titles appear ~18-19K times each
-"""
+# ==============================================================================
+# CONSTANTS (from dataset analysis and full_templates_report.txt)
+# ==============================================================================
 
-from datetime import date, datetime
-
-CONSULTING_FIRMS = {
-    'infosys', 'wipro', 'tcs', 'capgemini', 'hcl', 'mindtree',
-    'accenture', 'cognizant', 'tech mahindra', 'mphasis', 'hexaware',
-    'l&t infotech', 'ltimindtree', 'genpact'
-}
-
-HARD_IRRELEVANT_TITLES = {
-    'business analyst', 'graphic designer', 'mechanical engineer',
-    'accountant', 'project manager', 'customer support',
-    'operations manager', 'content writer', 'sales executive',
-    'civil engineer', 'marketing manager', 'hr manager',
-}
-
-TECH_INDUSTRIES = {
-    'software', 'ai/ml', 'fintech', 'e-commerce', 'saas',
-    'food delivery', 'transportation', 'edtech', 'healthtech',
-    'healthtech ai', 'conversational ai', 'ai services', 'voice ai',
-    'adtech', 'insurance tech', 'gaming', 'internet', 'media',
-    'consumer electronics'
-}
-
-# Fictional companies used as synthetic filler in dataset.
-# Candidates whose career is >50% at these are bots/honeypots.
 FICTIONAL_COMPANIES = {
     'pied piper', 'initech', 'wayne enterprises', 'acme corp',
     'stark industries', 'hooli', 'globex inc', 'dunder mifflin'
 }
 
+PROVEN_COMPANIES = {
+    # FAANG / big tech
+    'google', 'meta', 'amazon', 'microsoft', 'netflix',
+    'apple', 'adobe', 'salesforce', 'linkedin', 'uber',
+    # AI-native companies
+    'sarvam', 'rephrase', 'aganitha', 'niramai', 'saarthi',
+    'mad street den', 'observe.ai', 'krutrim', 'wysa', 'haptik',
+    'verloop', 'yellow.ai', 'locobuzz', 'glance',
+    # Indian product unicorns
+    'swiggy', 'razorpay', 'cred', 'zomato', 'flipkart', 'meesho',
+    'nykaa', 'inmobi', 'policybazaar', 'ola', 'zoho', 'vedantu',
+    'paytm', 'unacademy', 'pharmeasy', 'upgrad', 'freshworks',
+    'phonepe', 'dream11', 'byju'
+}
 
-def parse_date(date_str: str) -> date:
-    return datetime.strptime(date_str, "%Y-%m-%d").date()
+HIGH_SIGNAL_SKILLS = {
+    'faiss', 'pinecone', 'weaviate', 'qdrant', 'milvus',
+    'bm25', 'elasticsearch', 'opensearch',
+    'learning to rank', 'recommendation systems',
+    'rag', 'semantic search', 'vector search', 'hybrid search',
+    'sentence transformers', 'embeddings', 'information retrieval'
+}
 
 
-def _fictional_career_ratio(candidate: dict) -> float:
+# ==============================================================================
+# LOAD TEMPLATE FINGERPRINTS (from pre‑computed jd_templates.pkl)
+# ==============================================================================
+
+def load_drop_fingerprints(artifacts_dir: str = "artifacts") -> set:
     """
-    Return the fraction of career months spent at fictional companies.
-    Used by both is_honeypot() (as a flag) and passes_hard_filters() (as a cut).
+    Load jd_templates.pkl and return a set of fingerprints whose frequency
+    is >= 4100 (i.e., Templates #1–15 from full_templates_report.txt).
+    If the pickle does not exist, return an empty set (no template drop).
     """
-    career = candidate.get('career_history', [])
-    total = sum(j.get('duration_months', 0) for j in career)
-    if total == 0:
-        return 0.0
-    fictional = sum(
-        j.get('duration_months', 0) for j in career
-        if j.get('company', '').lower() in FICTIONAL_COMPANIES
-    )
-    return fictional / total
+    pkl_path = Path(artifacts_dir) / "jd_templates.pkl"
+    if not pkl_path.exists():
+        print("[filters] WARNING: jd_templates.pkl not found. No template-based dropping will occur.")
+        return set()
+
+    with open(pkl_path, "rb") as f:
+        data = pickle.load(f)
+
+    template_counter = data.get('template_counter', Counter())
+    drop_fingerprints = {
+        fp for fp, count in template_counter.items()
+        if count >= 4100   # captures all 15 mass‑produced irrelevant templates
+    }
+    print(f"[filters] Loaded {len(drop_fingerprints)} drop‑eligible fingerprints "
+          f"(frequency >= 4100) from {pkl_path}")
+    return drop_fingerprints
+
+DROP_TEMPLATE_FINGERPRINTS = load_drop_fingerprints()
 
 
-def is_honeypot(candidate: dict) -> bool:
-    """
-    Detect honeypot candidates with impossible/fabricated profiles.
-    Returns True if candidate should be discarded.
+# ==============================================================================
+# TEXT NORMALIZATION (must match analyze_jd_templates.py)
+# ==============================================================================
 
-    Rules:
-      1. Expert/advanced skill with duration_months = 0
-      2. Career timeline mathematically impossible vs years_of_experience
-      3. Assessment score contradicts claimed expert proficiency
-      4. Single job duration > total YoE
-      5. Perfect completeness + zero behavioral signals
-      6. >50% of career at fictional companies (new in V2)
-    """
+def normalize_sentence(sent: str) -> str:
+    sent = re.sub(r'\d+\.?\d*', 'XX', sent)
+    sent = re.sub(r'\b\w+\.ai\b', 'COMPANY', sent)
+    sent = re.sub(r'\(.*?\)', '', sent)
+    sent = re.sub(r'\s+', ' ', sent).strip()
+    return sent
+
+def extract_sentences(text: str) -> list:
+    if not text:
+        return []
+    raw = re.split(r'[.!?\n]', text)
+    return [s.strip() for s in raw if len(s.strip()) > 15]
+
+def get_jd_fingerprint(job_desc: str) -> str:
+    sents = extract_sentences(job_desc)
+    if not sents:
+        return ""
+    normalized = [normalize_sentence(s) for s in sents]
+    return " | ".join(normalized)
+
+
+# ==============================================================================
+# HONEYPOT DETECTION (returns number of flags)
+# ==============================================================================
+
+def is_honeypot(candidate: dict) -> int:
     flags = 0
+    career = candidate.get('career_history', [])
+    profile = candidate.get('profile', {})
+    signals = candidate.get('redrob_signals', {})
+    skills = candidate.get('skills', [])
 
     # --- Rule 1: expert/advanced skill with 0 months duration ---
-    zero_duration_advanced = sum(
-        1 for s in candidate.get('skills', [])
-        if s['proficiency'] in ('expert', 'advanced')
-        and s.get('duration_months', 1) == 0
-    )
+    zero_duration_advanced = 0
+    for skill in skills:
+        if skill.get('proficiency') in ('expert', 'advanced'):
+            if skill.get('duration_months', 1) == 0:
+                zero_duration_advanced += 1
     if zero_duration_advanced >= 2:
         flags += 1
     if zero_duration_advanced >= 4:
-        flags += 1  # double flag for egregious cases
+        flags += 1   # extra flag for egregious cases
 
-    # --- Rule 2: Career timeline impossibility ---
-    career = candidate.get('career_history', [])
+    # --- Rule 2: career timeline impossible vs years_of_experience ---
+    yeo_months = profile.get('years_of_experience', 0) * 12
     total_career_months = sum(j.get('duration_months', 0) for j in career)
-    yoe_months = candidate['profile']['years_of_experience'] * 12
-    if total_career_months > yoe_months + 18:
+    if total_career_months > yeo_months + 18:
         flags += 1
 
-    # --- Rule 3: Assessment contradicts proficiency ---
-    assessments = candidate['redrob_signals'].get('skill_assessment_scores', {})
+    # --- Rule 3: assessment contradicts expert proficiency ---
+    assessments = signals.get('skill_assessment_scores', {})
     skill_proficiency_map = {
-        s['name'].lower(): s['proficiency']
-        for s in candidate.get('skills', [])
+        s.get('name', '').lower(): s.get('proficiency', '')
+        for s in skills
     }
-    contradictions = sum(
-        1 for skill_name, score in assessments.items()
-        if skill_proficiency_map.get(skill_name.lower(), '') == 'expert'
-        and score < 25
-    )
-    if contradictions >= 2:
+    contradictions = 0
+    for skill_name, score in assessments.items():
+        claimed = skill_proficiency_map.get(skill_name.lower(), '')
+        if claimed == 'expert' and score < 25:
+            contradictions += 1
+    if contradictions >= 1:          # tightened from 2 to 1
         flags += 1
 
-    # --- Rule 4: Single job duration > total YoE ---
+    # --- Rule 4: single job tenure > YoE + 6 months ---
     for job in career:
-        if job.get('duration_months', 0) > yoe_months + 6:
+        if job.get('duration_months', 0) > yeo_months + 6:
             flags += 1
             break
 
-    # --- Rule 5: Perfect completeness + zero behavioral signals ---
-    signals = candidate['redrob_signals']
-    if (signals.get('profile_completeness_score', 0) >= 95 and
-            signals.get('profile_views_received_30d', 0) == 0 and
-            signals.get('applications_submitted_30d', 0) == 0 and
-            signals.get('saved_by_recruiters_30d', 0) == 0):
-        flags += 1
+    # --- Rule 5: perfect completeness + zero behavioral signals ---
+    completeness = signals.get('profile_completeness_score', 0)
+    views = signals.get('profile_views_received_30d', -1)
+    saves = signals.get('saved_by_recruiters_30d', -1)
+    apps = signals.get('applications_submitted_30d', -1)
+    if completeness >= 85 and views == 0 and saves == 0 and apps == 0:
+        flags += 2   # heavy penalty for a perfectly filled, dead profile
 
-    # --- Rule 6 (NEW): Majority fictional career ---
-    # >50% of career at Dunder Mifflin / Pied Piper etc. → almost certainly a bot
-    if _fictional_career_ratio(candidate) > 0.5:
-        flags += 2  # Strong signal — double flag immediately
+    return flags
 
-    return flags >= 2
 
+# ==============================================================================
+# MAIN HARD FILTER
+# ==============================================================================
 
 def passes_hard_filters(candidate: dict) -> bool:
-    """
-    Hard business rules. Eliminate candidates who cannot possibly be hired.
-    Conservative — only eliminate when very confident.
-    """
-    profile = candidate['profile']
-    signals = candidate['redrob_signals']
-    today = date.today()
+    profile = candidate.get('profile', {})
+    signals = candidate.get('redrob_signals', {})
+    career = candidate.get('career_history', [])
+    skills = candidate.get('skills', [])
 
-    # --- Filter 1: Must be India-based or willing to relocate ---
-    if profile['country'] != 'India' and not signals['willing_to_relocate']:
+    # --- Hard Filter A: Minimum experience ---
+    yoe = profile.get('years_of_experience', 0)
+    if yoe < 3.0:
         return False
 
-    # --- Filter 2: Minimum experience floor ---
-    # JD says 5-9 years, we allow 3+ to not be too aggressive
-    if profile['years_of_experience'] < 3:
+    # --- Hard Filter B: Location & relocation (JD explicit) ---
+    country = profile.get('country', '')
+    willing_to_relocate = signals.get('willing_to_relocate', False)
+    if country != 'India' and not willing_to_relocate:
         return False
 
-    # --- Filter 3: Completely dead + not looking ---
-    days_inactive = (today - parse_date(signals['last_active_date'])).days
-    if not signals['open_to_work_flag'] and days_inactive > 180:
+    # --- Hard Filter C: Fictional companies ---
+    current_company = profile.get('current_company', '').lower()
+    if current_company in FICTIONAL_COMPANIES:
         return False
 
-    # --- Filter 4: Completely irrelevant career with zero tech exposure ---
-    title_lower = profile['current_title'].lower()
-    if title_lower in HARD_IRRELEVANT_TITLES:
-        all_industries = {j['industry'].lower() for j in candidate.get('career_history', [])}
-        has_any_tech = any(
-            ind in TECH_INDUSTRIES or 'tech' in ind or 'software' in ind or 'ai' in ind
-            for ind in all_industries
+    total_months = sum(j.get('duration_months', 0) for j in career)
+    if total_months > 0:
+        fictional_months = sum(
+            j.get('duration_months', 0) for j in career
+            if j.get('company', '').lower() in FICTIONAL_COMPANIES
         )
-        has_ai_skills = any(
-            s['name'].lower() in {
-                'machine learning', 'python', 'nlp', 'deep learning',
-                'pytorch', 'tensorflow', 'embeddings', 'rag', 'llms'
-            }
-            for s in candidate.get('skills', [])
-            if s['proficiency'] in ('advanced', 'expert')
-        )
-        if not has_any_tech and not has_ai_skills:
+        if fictional_months / total_months > 0.5:
             return False
 
-    # --- Filter 5 (NEW): Majority fictional career ---
-    # Redundant with is_honeypot Rule 6 but acts as a safety net
-    # in case honeypot flags didn't fire (e.g. clean behavioral signals on a bot)
-    if _fictional_career_ratio(candidate) > 0.5:
-        return False
+    # --- Hard Filter D: Template drop (Templates #1–15) ---
+    # Only apply if we have drop fingerprints loaded
+    if DROP_TEMPLATE_FINGERPRINTS and career:
+        current_job = career[0]  # most recent job
+        desc = current_job.get('description', '')
+        if desc:
+            fingerprint = get_jd_fingerprint(desc)
+            if fingerprint in DROP_TEMPLATE_FINGERPRINTS:
+                # ---- Override 1: Verified Deep Skills ----
+                verified_count = 0
+                for skill in skills:
+                    name = skill.get('name', '').lower()
+                    if name in HIGH_SIGNAL_SKILLS:
+                        if skill.get('proficiency') in ('advanced', 'expert'):
+                            if skill.get('duration_months', 0) >= 12:
+                                score = signals.get('skill_assessment_scores', {}).get(name, -1)
+                                if score > 50:
+                                    verified_count += 1
+                if verified_count >= 2:
+                    return True   # rescued by deep verified skills
 
+                # ---- Override 2: Proven past companies ----
+                for job in career:
+                    company = job.get('company', '').lower()
+                    if any(p in company for p in PROVEN_COMPANIES):
+                        return True   # rescued by past top‑tier company
+
+                # ---- No override applies: drop ----
+                return False
+
+    # ---- All checks passed ----
     return True
 
 
+# ==============================================================================
+# FILTER WRAPPER (for use by precompute.py)
+# ==============================================================================
+
 def filter_candidates(candidates: list) -> list:
     """
-    Apply honeypot detection and hard filters.
-    Returns filtered list with stats printed.
+    Apply honeypot detection and hard filters to a list of candidates.
+    Returns the list of candidates that survive.
+    Also prints a summary of removals.
     """
     passed = []
     honeypot_count = 0
     hard_filter_count = 0
+    template_drop_count = 0
 
     for c in candidates:
-        if is_honeypot(c):
+        flags = is_honeypot(c)
+        if flags > 0:
             honeypot_count += 1
             continue
-        if not passes_hard_filters(c):
+
+        # Hard filters (including template drop)
+        hard_ok = passes_hard_filters(c)
+        if not hard_ok:
             hard_filter_count += 1
             continue
+
         passed.append(c)
 
     total = len(candidates)
-    print(f"[filter] Total input:       {total:,}")
-    print(f"[filter] Honeypots removed: {honeypot_count:,}")
-    print(f"[filter] Hard filtered:     {hard_filter_count:,}")
-    print(f"[filter] Remaining:         {len(passed):,} ({len(passed)/total*100:.1f}%)")
+    print(f"[filter] Total candidates:    {total:,}")
+    print(f"[filter] Honeypot removed:    {honeypot_count:,}")
+    print(f"[filter] Hard filters removed:{hard_filter_count:,}")
+    print(f"[filter] Remaining:           {len(passed):,} ({len(passed)/total*100:.1f}%)")
     return passed
+
+
+# ==============================================================================
+# STANDALONE TESTING MODE
+# ==============================================================================
+
+def load_candidates(path: str) -> list:
+    """Load candidates from .jsonl or .jsonl.gz."""
+    candidates = []
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    candidates.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    print(f"[test] Loaded {len(candidates):,} candidates from {path}")
+    return candidates
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Test filters.py on a candidate file.")
+    parser.add_argument("--candidates", required=True, help="Path to candidates.jsonl or .jsonl.gz")
+    parser.add_argument("--artifacts", default="artifacts", help="Directory containing jd_templates.pkl")
+    args = parser.parse_args()
+
+    # Reload template fingerprints with the user‑specified artifacts dir
+    DROP_TEMPLATE_FINGERPRINTS = load_drop_fingerprints(args.artifacts)
+
+    candidates = load_candidates(args.candidates)
+    filtered = filter_candidates(candidates)
+    print(f"\n[test] Final count: {len(filtered):,} candidates pass all filters.")
