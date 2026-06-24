@@ -1,33 +1,18 @@
-"""
-signals.py — Structured signal scoring calibrated to real 100K dataset distributions.
-
-All thresholds are derived from actual percentile stats, not guesses:
-
-years_of_experience:  mean=7.17, p25=3.9, p50=6.8, p75=9.9
-notice_period_days:   mean=87, median=90, p25=60, p75=120, p90=150
-                      Values cluster at 0, 30, 60, 90, 120, 150 (discrete)
-recruiter_response:   mean=0.44, p25=0.25, p50=0.44, p75=0.62, p90=0.73
-github_activity:      64.6% are -1 (no github). Valid range: 0-96.9, mean=29, p75=42
-last_active:          date range 2025-09 → 2026-05, most active in 2026
-open_to_work:         only 35,339 / 100,000 = 35.3% are open
-offer_acceptance:     59.6% are -1. Valid mean=0.47
-interview_completion: mean=0.62, p25=0.48, p75=0.76
-saved_by_recruiters:  mean=7.66, p75=11, p90=15, p99=28
-
-Company type scoring based on actual company frequency:
-- FAANG (Google, Meta, Amazon etc): 7-14 people total — extremely rare, gold signal
-- AI-native (Sarvam AI, Mad Street Den etc): 25-79 people — rare, strong signal
-- Indian product unicorns (Swiggy, Razorpay, Zomato etc): 2800-3000 — good signal
-- Consulting (Infosys, Wipro, TCS etc): 23,000+ each — negative signal
-- Neutral companies: mid-range
-
-JD-specific thresholds:
-- YoE sweet spot: 5-9 years (JD explicit)
-- Notice period: <30 preferred, 30-60 acceptable, 60-90 tolerable, 90+ penalty
-- Salary range hint from data: mean salary_max = 19.84 LPA, p95 = 33.8 LPA
-"""
+# signals.py - Structured signal scoring, calibrated to real 100K dataset distributions.
+#
+# V2 changes:
+#   - compute_final_score() now returns (final_score, signal_profile) where
+#     signal_profile is a dict of all component multipliers.
+#   - This allows rank.py to pass the breakdown to reasoning.py for transparent
+#     narrative generation.
+#   - Added jd_template_multiplier() that applies 1.30x for golden templates,
+#     1.05x for ml_adj, 0.95x for data_eng, 0.70x for irrelevant.
 
 from datetime import date, datetime
+
+# ------------------------------------------------------------------------------
+# Constants (from dataset analysis)
+# ------------------------------------------------------------------------------
 
 CONSULTING_FIRMS = {
     'infosys', 'wipro', 'tcs', 'capgemini', 'hcl', 'mindtree',
@@ -42,185 +27,177 @@ PRODUCT_INDUSTRIES = {
     'insurance tech', 'gaming', 'internet'
 }
 
-# Tier-1 AI/search skills from our JD analysis
 CORE_JD_SKILLS = {
     'faiss', 'pinecone', 'weaviate', 'qdrant', 'milvus', 'elasticsearch',
     'opensearch', 'pgvector', 'vector search', 'semantic search',
     'information retrieval', 'hybrid search', 'bm25',
-    'sentence transformers', 'sentence-transformers', 'embeddings',
-    'hugging face transformers', 'learning to rank', 'recommendation systems',
-    'lora', 'qlora', 'peft', 'fine-tuning llms', 'haystack', 'llamaindex',
-    'pytorch', 'tensorflow', 'scikit-learn', 'nlp', 'machine learning',
-    'deep learning', 'python', 'rag',
+    'sentence transformers', 'embeddings', 'hugging face transformers',
+    'learning to rank', 'recommendation systems', 'lora', 'qlora', 'peft',
+    'fine-tuning llms', 'haystack', 'llamaindex', 'pytorch', 'tensorflow',
+    'scikit-learn', 'nlp', 'machine learning', 'deep learning', 'python', 'rag',
 }
 
+# Same as HIGH_SIGNAL_SKILLS in filters.py – used for skill depth scoring.
+HIGH_SIGNAL_SKILLS = CORE_JD_SKILLS  # we use the same set for simplicity
+
+FAANG_LIST = {
+    'google', 'meta', 'amazon', 'microsoft', 'netflix',
+    'apple', 'adobe', 'salesforce', 'linkedin', 'uber'
+}
+
+AI_NATIVE_LIST = {
+    'sarvam', 'rephrase', 'aganitha', 'niramai', 'saarthi',
+    'mad street den', 'observe.ai', 'krutrim', 'wysa', 'haptik',
+    'verloop', 'yellow.ai', 'locobuzz', 'glance'
+}
+
+UNICORN_LIST = {
+    'swiggy', 'razorpay', 'cred', 'zomato', 'flipkart', 'meesho',
+    'nykaa', 'inmobi', 'policybazaar', 'ola', 'zoho', 'vedantu',
+    'paytm', 'unacademy', 'pharmeasy', 'upgrad', 'freshworks',
+    'phonepe', 'dream11', 'byju'
+}
+
+# ------------------------------------------------------------------------------
+# Parsing helper
+# ------------------------------------------------------------------------------
 
 def parse_date(date_str: str) -> date:
     return datetime.strptime(date_str, "%Y-%m-%d").date()
 
+# ------------------------------------------------------------------------------
+# Individual scoring functions
+# ------------------------------------------------------------------------------
 
 def experience_fit_score(profile: dict) -> float:
     """
     JD wants 5-9 years. Dataset mean is 7.17.
-    Score based on how close to sweet spot.
+    Returns:
+        1.0  : 6-8 years (peak)
+        0.95 : 5-6 or 8-9
+        0.85 : 4-5 or 9-12
+        0.70 : 3-4
+        0.60 : 9-12 (was 0.85, tightened)
+        0.35 : >12 (heavy penalty)
+        0.40 : <3
     """
-    yoe = profile['years_of_experience']
-
-    if 5 <= yoe <= 9:
-        # Peak zone — full score, slight bonus for center
-        if 6 <= yoe <= 8:
-            return 1.0
+    yoe = profile.get('years_of_experience', 0)
+    if 6 <= yoe <= 8:
+        return 1.0
+    if 5 <= yoe < 6 or 8 < yoe <= 9:
         return 0.95
-    elif 4 <= yoe < 5:
-        return 0.85   # slightly junior but acceptable
-    elif 9 < yoe <= 12:
-        return 0.85   # slightly senior, may expect more money/title
-    elif 3 <= yoe < 4:
+    if 4 <= yoe < 5:
+        return 0.85
+    if 9 < yoe <= 12:
+        return 0.60
+    if yoe > 12:
+        return 0.35
+    if 3 <= yoe < 4:
         return 0.70
-    elif yoe > 12:
-        return 0.75   # overqualified concern
-    else:
-        return 0.50   # < 3 years
-
+    return 0.40  # <3 years
 
 def availability_score(signals: dict) -> float:
     """
-    Combines open_to_work, recency of activity, and recruiter responsiveness.
-    
-    Calibrated to dataset:
-    - Only 35.3% are open_to_work — being open is a strong differentiator
-    - Last active: most candidates are active 2026-01 to 2026-05
-    - recruiter_response_rate: mean=0.44, p75=0.62
+    Combines open_to_work, last activity recency, and recruiter response.
+    Calibrated: only 35.3% are open → 1.25x boost.
     """
     today = date.today()
     score = 1.0
 
-    # Open to work — 35.3% signal
-    if signals['open_to_work_flag']:
-        score *= 1.25   # strong positive — only 1/3 of pool
-    else:
-        score *= 0.72   # penalize but don't eliminate
+    # Open to work – rare, strong signal
+    if signals.get('open_to_work_flag', False):
+        score *= 1.25
 
-    # Activity recency
-    days_inactive = (today - parse_date(signals['last_active_date'])).days
-    if days_inactive <= 14:
-        score *= 1.15   # very recently active
-    elif days_inactive <= 30:
-        score *= 1.10
-    elif days_inactive <= 60:
-        score *= 1.0    # baseline — most candidates fall here
-    elif days_inactive <= 90:
-        score *= 0.90
-    elif days_inactive <= 120:
-        score *= 0.80
-    else:
-        score *= 0.60   # > 4 months inactive
+    # Recency – active in last 30 days is good
+    last_active = signals.get('last_active_date')
+    if last_active:
+        days_inactive = (today - parse_date(last_active)).days
+        if days_inactive <= 30:
+            score *= 1.05
+        elif days_inactive > 180:
+            score *= 0.92
 
-    # Recruiter response rate (mean=0.44, p75=0.62)
-    rr = signals['recruiter_response_rate']
-    if rr >= 0.70:      # above p75
-        score *= 1.12
-    elif rr >= 0.44:    # above mean
-        score *= 1.05
-    elif rr >= 0.25:    # above p25
-        score *= 0.98
-    else:               # below p25
-        score *= 0.88
+    # Recruiter response rate – mean=0.44, p75=0.62
+    rr = signals.get('recruiter_response_rate', 0.0)
+    if rr >= 0.75:
+        score *= 1.06
+    elif rr >= 0.62:
+        score *= 1.03
+    elif rr < 0.20:
+        score *= 0.95
 
     return score
 
-
 def notice_period_score(signals: dict) -> float:
     """
-    Dataset: median=90 days. Values cluster at 0, 30, 60, 90, 120, 150.
-    JD says: <30 preferred, buyout up to 30, 30+ harder, 90+ painful.
-    
-    Since median is 90 and JD wants low notice:
-    - 0-30 days: top 10-15% of candidates → big boost
-    - 30-60 days: good
-    - 60-90 days: median — neutral
-    - 90-120: penalty
-    - 120-150: heavy penalty
+    JD prefers <30 days. Median is 90 days.
     """
-    days = signals['notice_period_days']
-
+    days = signals.get('notice_period_days', 90)
     if days == 0:
-        return 1.20   # immediately joinable
+        return 1.20
     elif days <= 30:
-        return 1.15   # well below median — positive differentiator
+        return 1.15
     elif days <= 60:
-        return 1.05   # below median — slight positive
+        return 1.05
     elif days <= 90:
-        return 1.0    # at median — baseline
+        return 1.00
     elif days <= 120:
-        return 0.85   # above median — penalty
+        return 0.85
     else:
-        return 0.70   # 150 days = p90 — strong penalty
-
+        return 0.70
 
 def location_score(profile: dict, signals: dict) -> float:
     """
-    JD: Pune or Noida preferred. India is acceptable.
+    JD prefers Pune or Noida. India is acceptable.
     Outside India only if willing to relocate.
-    
-    Dataset: 71,196 NOT willing to relocate.
     """
-    country = profile['country']
+    country = profile.get('country', '')
     location = profile.get('location', '').lower()
 
     if country == 'India':
         if 'pune' in location:
-            return 1.10    # JD explicitly prefers Pune
+            return 1.10
         elif 'noida' in location or 'delhi' in location or 'ncr' in location:
-            return 1.08    # JD explicitly prefers Noida
+            return 1.08
         elif 'bangalore' in location or 'bengaluru' in location:
-            return 1.0     # major tech hub, easy relocation
+            return 1.00
         elif 'hyderabad' in location or 'mumbai' in location or 'chennai' in location:
             return 0.97
         else:
-            return 0.93    # tier 2/3 city — may need relocation
+            return 0.93
     else:
-        if signals['willing_to_relocate']:
-            return 0.75    # willing to come to India — possible but logistics
+        if signals.get('willing_to_relocate', False):
+            return 0.75
         else:
-            return 0.45    # outside India, not relocating — near-disqualifier
-
+            return 0.45
 
 def github_score(signals: dict) -> float:
     """
-    64.6% of candidates have github_activity_score = -1 (no GitHub linked).
-    Valid scores range 0-96.9, mean=29, p75=42, p90=51.7
-    
-    Having GitHub at all is a differentiator (only 35.4% do).
-    High GitHub score = external validation = JD explicitly values this.
+    64.6% have -1 (no GitHub) – slight penalty.
+    Valid scores: mean=29, p75=42, p90=51.7.
     """
-    g = signals['github_activity_score']
-
+    g = signals.get('github_activity_score', -1)
     if g == -1:
-        return 0.92    # no github — slight penalty, not disqualifying
-                       # 64.6% are in this bucket so can't be too harsh
-    elif g >= 52:      # above p90 of valid scores
+        return 0.92
+    if g >= 52:
         return 1.20
-    elif g >= 42:      # above p75
+    if g >= 42:
         return 1.12
-    elif g >= 29:      # above mean
+    if g >= 29:
         return 1.06
-    elif g >= 14:      # above p25
-        return 1.0
-    else:
-        return 0.96    # has github but low activity
-
+    if g >= 14:
+        return 1.00
+    return 0.96
 
 def career_quality_score(career_history: list) -> float:
     """
-    Most important structured signal. Calibrated to actual company distribution:
-    
-    Consulting firms: 23K each in career history = extremely common = negative signal
-    Product companies: 2800-3000 for tier-1 Indian unicorns = much less common = positive
-    FAANG: 7-13 total = extremely rare = highest signal
-    AI-native: 25-79 total = very rare = high signal
-    
-    JD explicitly disqualifies: "consulting firm–only careers (TCS, Infosys...)"
+    Weighted by company type:
+      FAANG        → 1.35x (very rare)
+      AI-Native    → 1.30x
+      Product (unicorn) → 1.15x
+      Consulting   → 0.85x
+      Other        → 1.00x
+    Months are weighted proportionally.
     """
     if not career_history:
         return 0.70
@@ -229,175 +206,185 @@ def career_quality_score(career_history: list) -> float:
     if total_months == 0:
         return 0.70
 
-    consulting_months = 0
-    faang_months = 0
-    ai_native_months = 0
-    product_months = 0
+    weights = {
+        'faang': 1.35,
+        'ai_native': 1.30,
+        'product': 1.15,
+        'consulting': 0.85,
+        'other': 1.00
+    }
 
+    weighted_sum = 0.0
     for job in career_history:
-        company_lower = job['company'].lower()
-        industry_lower = job['industry'].lower()
+        company = job.get('company', '').lower()
+        industry = job.get('industry', '').lower()
         months = job.get('duration_months', 0)
 
-        # Check FAANG first
-        if any(f in company_lower for f in [
-            'google', 'meta', 'amazon', 'microsoft', 'netflix',
-            'apple', 'adobe', 'salesforce', 'linkedin', 'uber'
-        ]):
-            faang_months += months
+        # Determine type
+        if any(f in company for f in FAANG_LIST):
+            typ = 'faang'
+        elif any(a in company for a in AI_NATIVE_LIST):
+            typ = 'ai_native'
+        elif any(c in company for c in CONSULTING_FIRMS):
+            typ = 'consulting'
+        elif (any(u in company for u in UNICORN_LIST) or
+              industry in PRODUCT_INDUSTRIES):
+            typ = 'product'
+        else:
+            typ = 'other'
 
-        # Check AI-native
-        elif any(a in company_lower for a in [
-            'sarvam', 'rephrase', 'aganitha', 'niramai', 'saarthi',
-            'mad street den', 'observe.ai', 'krutrim', 'wysa', 'haptik',
-            'verloop', 'yellow.ai', 'locobuzz', 'glance'
-        ]):
-            ai_native_months += months
+        weighted_sum += weights[typ] * months
 
-        # Check consulting
-        elif any(c in company_lower for c in CONSULTING_FIRMS):
-            consulting_months += months
-
-        # Check product by industry
-        elif industry_lower in PRODUCT_INDUSTRIES:
-            product_months += months
-
-    consulting_ratio = consulting_months / total_months
-    faang_ratio = faang_months / total_months
-    ai_native_ratio = ai_native_months / total_months
-    product_ratio = product_months / total_months
-
-    # FAANG/AI-native experience is the highest signal
-    if faang_ratio > 0:
-        base = 1.35 + (faang_ratio * 0.15)   # 1.35 - 1.50
-    elif ai_native_ratio > 0:
-        base = 1.25 + (ai_native_ratio * 0.10)  # 1.25 - 1.35
-    elif product_ratio >= 0.6:
-        base = 1.15
-    elif product_ratio >= 0.3:
-        base = 1.05
-    else:
-        base = 0.90
-
-    # Consulting penalty — JD is explicit about this
-    if consulting_ratio >= 0.90:
-        base *= 0.45   # entire career consulting = strong disqualifier
-    elif consulting_ratio >= 0.70:
-        base *= 0.65
-    elif consulting_ratio >= 0.50:
-        base *= 0.80
-    elif consulting_ratio >= 0.30:
-        base *= 0.90   # mixed but still some consulting — slight penalty
-
-    return min(base, 1.50)   # cap at 1.5x
-
+    return weighted_sum / total_months
 
 def skill_depth_score(candidate: dict) -> float:
     """
-    Validates claimed skills against assessment scores.
-    
-    From data: assessment means for core skills range 54-56.
-    Anything >60 is above average, >70 is strong.
-    
-    Also checks: do they have MULTIPLE tier-1 skills with real duration?
-    (Many candidates have 1-2 core skills; having 4+ with duration is rare)
+    Count advanced/expert CORE_JD_SKILLS with ≥12 months.
+    Also add assessment bonus for scores > 50 (threshold lowered from 60).
     """
-    assessments = candidate['redrob_signals'].get('skill_assessment_scores', {})
     skills = candidate.get('skills', [])
+    assessments = candidate.get('redrob_signals', {}).get('skill_assessment_scores', {})
 
-    # Count tier-1 skills with real duration
-    core_skills_with_depth = [
-        s for s in skills
-        if s['name'].lower() in CORE_JD_SKILLS
-        and s['proficiency'] in ('advanced', 'expert')
-        and s.get('duration_months', 0) >= 12  # at least 1 year of actual use
-    ]
-
-    # Base from skill depth (more core skills = more breadth in IR/ML stack)
-    depth_count = len(core_skills_with_depth)
-    if depth_count >= 6:
-        depth_bonus = 1.15
-    elif depth_count >= 4:
-        depth_bonus = 1.10
-    elif depth_count >= 2:
-        depth_bonus = 1.05
-    elif depth_count >= 1:
-        depth_bonus = 1.0
-    else:
-        depth_bonus = 0.85   # no validated core skills is a red flag
-
-    # Assessment bonus for relevant skills
+    # Count deep skills
+    deep_count = 0
     assessment_bonus = 1.0
-    for skill_name, score in assessments.items():
-        if skill_name.lower() in CORE_JD_SKILLS:
-            if score >= 70:
-                assessment_bonus += 0.06
-            elif score >= 60:
-                assessment_bonus += 0.03
+    for skill in skills:
+        name = skill.get('name', '').lower()
+        if name in CORE_JD_SKILLS:
+            if skill.get('proficiency') in ('advanced', 'expert'):
+                if skill.get('duration_months', 0) >= 12:
+                    deep_count += 1
+            # Assessment bonus for any core skill with score > 50
+            score = assessments.get(name, -1)
+            if score > 50:
+                assessment_bonus += 0.04  # small boost per skill
+
+    # Depth bonus
+    if deep_count >= 6:
+        depth_bonus = 1.15
+    elif deep_count >= 4:
+        depth_bonus = 1.10
+    elif deep_count >= 2:
+        depth_bonus = 1.05
+    elif deep_count >= 1:
+        depth_bonus = 1.00
+    else:
+        depth_bonus = 0.85
+
+    # Cap assessment bonus at 1.25
     assessment_bonus = min(assessment_bonus, 1.25)
 
     return depth_bonus * assessment_bonus
 
-
 def recruiter_market_signal(signals: dict) -> float:
     """
-    Recruiter market signals tell us how the market already values this candidate.
-    
-    saved_by_recruiters_30d: mean=7.66, p75=11, p90=15, p99=28
-    profile_views_received_30d: mean=47.99, p75=68, p90=86
-    
-    If many recruiters are already saving this profile, that's external validation.
+    External validation: saved_by_recruiters_30d (mean=7.66, p75=11, p90=15)
+    and profile_views_received_30d (mean=47.99, p75=68, p90=86).
     """
     saved = signals.get('saved_by_recruiters_30d', 0)
     views = signals.get('profile_views_received_30d', 0)
 
     score = 1.0
-
-    # saved_by_recruiters: p75=11, p90=15, p99=28
-    if saved >= 20:     # top ~2%
+    if saved >= 20:
         score *= 1.10
-    elif saved >= 15:   # p90
+    elif saved >= 15:
         score *= 1.06
-    elif saved >= 11:   # p75
-        score *= 1.03
-    elif saved <= 2:    # very low market interest
-        score *= 0.95
-
-    # profile_views: p75=68, p90=86
-    if views >= 100:
+    elif saved >= 11:
         score *= 1.04
-    elif views >= 68:   # p75
-        score *= 1.02
+
+    if views >= 86:
+        score *= 1.05
+    elif views >= 68:
+        score *= 1.03
 
     return score
 
-
-def compute_final_score(ce_score: float, candidate: dict) -> float:
+def jd_template_multiplier(jd_template: dict) -> float:
     """
-    Combine cross-encoder score with structured signals.
-    
-    Weights:
-    - Cross-encoder already captures text fit (JD ↔ candidate doc)
-    - Structured signals multiply to adjust for availability, career quality etc.
-    
-    ce_score: sigmoid-normalized cross-encoder output (0-1)
+    Multipliers based on template tier (from full_templates_report.txt).
+      'golden'   → 1.30
+      'ml_adj'   → 1.05
+      'data_eng' → 0.95
+      'irrelevant' → 0.70
+      None       → 1.00
     """
-    import math
+    if jd_template is None:
+        return 1.00
+    tier = jd_template.get('tier', '')
+    if tier == 'golden':
+        return 1.30
+    elif tier == 'ml_adj':
+        return 1.05
+    elif tier == 'data_eng':
+        return 0.95
+    elif tier == 'irrelevant':
+        return 0.70
+    else:
+        return 1.00
 
-    profile = candidate['profile']
-    signals = candidate['redrob_signals']
+# ------------------------------------------------------------------------------
+# Main entry point
+# ------------------------------------------------------------------------------
+
+def compute_final_score(ce_score: float, candidate: dict, jd_template: dict = None) -> tuple:
+    """
+    Compute final score and return both the score and a signal profile dict.
+
+    Args:
+        ce_score: cross-encoder logit (sigmoid-normalized, 0-1)
+        candidate: full candidate JSON
+        jd_template: dict from template map (or None)
+
+    Returns:
+        (final_score, signal_profile)
+        - final_score: float
+        - signal_profile: dict with keys:
+            'ce_score',
+            'experience_fit',
+            'availability',
+            'notice_period',
+            'location',
+            'github',
+            'career_quality',
+            'skill_depth',
+            'recruiter_market',
+            'jd_template_multiplier',
+            'combined_multiplier'
+    """
+    profile = candidate.get('profile', {})
+    signals = candidate.get('redrob_signals', {})
     career = candidate.get('career_history', [])
 
-    # All multipliers composed together
+    # Compute each component
+    exp = experience_fit_score(profile)
+    avail = availability_score(signals)
+    notice = notice_period_score(signals)
+    loc = location_score(profile, signals)
+    gh = github_score(signals)
+    career_q = career_quality_score(career)
+    skill_d = skill_depth_score(candidate)
+    recruiter = recruiter_market_signal(signals)
+    jd_mult = jd_template_multiplier(jd_template)
+
+    # Combine all structured multipliers
     structured_multiplier = (
-        experience_fit_score(profile)
-        * availability_score(signals)
-        * notice_period_score(signals)
-        * location_score(profile, signals)
-        * github_score(signals)
-        * career_quality_score(career)
-        * skill_depth_score(candidate)
-        * recruiter_market_signal(signals)
+        exp * avail * notice * loc * gh * career_q * skill_d * recruiter * jd_mult
     )
 
-    return ce_score * structured_multiplier
+    final_score = ce_score * structured_multiplier
+
+    profile_dict = {
+        'ce_score': ce_score,
+        'experience_fit': exp,
+        'availability': avail,
+        'notice_period': notice,
+        'location': loc,
+        'github': gh,
+        'career_quality': career_q,
+        'skill_depth': skill_d,
+        'recruiter_market': recruiter,
+        'jd_template_multiplier': jd_mult,
+        'combined_multiplier': structured_multiplier,
+    }
+
+    return final_score, profile_dict
