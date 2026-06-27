@@ -10,10 +10,9 @@
 # Artifacts saved to ./artifacts/:
 #     candidate_ids.npy        — aligned IDs (same order as embeddings)
 #     embeddings.npy           — 8192‑dim dense vectors for each candidate
-#     jd_embedding.npy         — JD query embedding
+#     jd_embedding.npy         — JD query embedding (normalized)
 #     bm25_index/              — BM25 index (saved via bm25s)
 #     jd_query_tokens.pkl      — tokenized JD query for BM25
-#     jd_templates.pkl         — template classification map (from analyze_jd_templates.py)
 #     best_narratives.pkl      — semantic quotes + scores for golden candidates
 
 import argparse
@@ -38,18 +37,17 @@ from src.reranker import JD_QUERY
 # ------------------------------------------------------------------------------
 
 ARTIFACTS_DIR = Path("artifacts")
-BATCH_SIZE = 64  # for embedding generation
+BATCH_SIZE = 64
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 
-# Golden template classification thresholds (must match rank.py)
+# Golden template classification threshold (must match rank.py)
 GOLDEN_MAX_FREQ = 41
 
 
 def classify_template(freq: int) -> str:
     if freq <= GOLDEN_MAX_FREQ:
         return 'golden'
-    else:
-        return 'other'
+    return 'other'
 
 
 # ------------------------------------------------------------------------------
@@ -77,6 +75,25 @@ def get_jd_fingerprint(job_desc: str) -> str:
         return ""
     normalized = [normalize_sentence(s) for s in sents]
     return " | ".join(normalized)
+
+
+def truncate_quote(quote: str, max_words: int = 30) -> str:
+    """
+    Truncate a quote at a sentence boundary (., !, ?) to avoid mid‑sentence cutoffs.
+    Returns the truncated quote with an ellipsis if shortened.
+    """
+    words = quote.split()
+    if len(words) <= max_words:
+        return quote
+
+    truncated = ' '.join(words[:max_words])
+
+    for sep in ['.', '!', '?']:
+        last_boundary = truncated.rfind(sep)
+        if last_boundary != -1:
+            return truncated[:last_boundary + 1] + '...'
+
+    return truncated + '...'
 
 
 # ------------------------------------------------------------------------------
@@ -126,7 +143,7 @@ def load_jd_templates(artifacts_dir: str) -> dict:
 
 
 # ------------------------------------------------------------------------------
-# Semantic quote selection (NEW)
+# Semantic quote selection (UPDATED)
 # ------------------------------------------------------------------------------
 
 def select_semantic_quotes(
@@ -137,7 +154,8 @@ def select_semantic_quotes(
 ) -> dict:
     """
     For each golden candidate (template freq <= 41), extract sentences from
-    their current JD, encode them, compute cosine similarity to the JD embedding,
+    their current JD, encode them with the proper "search_document: " prefix,
+    compute cosine similarity to the JD query (encoded with "search_query: "),
     and store the best (quote, score).
 
     Returns:
@@ -163,11 +181,10 @@ def select_semantic_quotes(
 
     print(f"[precompute] Selecting semantic quotes for {len(golden_candidates):,} golden candidates...")
 
-    # Build a mapping: candidate_id -> candidate
     cand_map = {c['candidate_id']: c for c in candidates}
 
     results = {}
-    # Normalize the JD embedding for cosine similarity
+    # The JD embedding is already normalized from encoding with 'search_query: ' prefix.
     jd_vec = jd_embedding.reshape(1, -1)
     jd_norm = jd_vec / np.linalg.norm(jd_vec, axis=1, keepdims=True)
 
@@ -189,39 +206,40 @@ def select_semantic_quotes(
         if not sentences:
             continue
 
-        # Encode all sentences (batch‑size 1 to keep it simple)
-        # The model is already loaded in GPU/CPU memory
+        # Fix: Add "search_document: " prefix and normalize for cosine similarity.
+        prefixed_sentences = [f"search_document: {s}" for s in sentences]
+
         try:
             embeds = model.encode(
-                sentences,
+                prefixed_sentences,
                 convert_to_numpy=True,
-                normalize_embeddings=True,  # L2 normalize for cosine similarity
+                normalize_embeddings=True,
                 show_progress_bar=False,
             )
         except Exception as e:
-            # Fallback: encode one by one if batch fails
+            # Fallback: encode one by one
             embeds = []
-            for sent in sentences:
+            for prefixed_sent in prefixed_sentences:
                 try:
-                    e = model.encode(sent, convert_to_numpy=True, normalize_embeddings=True)
+                    e = model.encode(prefixed_sent, convert_to_numpy=True, normalize_embeddings=True)
                     embeds.append(e)
                 except Exception:
                     embeds.append(np.zeros(model.get_sentence_embedding_dimension()))
             embeds = np.array(embeds)
 
-        # Compute cosine similarity (already normalized)
-        similarities = embeds @ jd_norm.T  # shape (n_sentences, 1)
+        similarities = embeds @ jd_norm.T
         similarities = similarities.flatten()
 
-        # Pick the best sentence (highest similarity)
         best_idx = np.argmax(similarities)
         best_score = float(similarities[best_idx])
-        best_quote = sentences[best_idx]
+        best_quote_raw = sentences[best_idx]
 
-        # Only store if similarity is > 0.3 (otherwise it's basically noise)
+        # Truncate at sentence boundary
+        best_quote_clean = truncate_quote(best_quote_raw, max_words=30)
+
         if best_score > 0.3:
             results[cid] = {
-                'semantic_quote': best_quote,
+                'semantic_quote': best_quote_clean,
                 'semantic_score': best_score,
             }
 
@@ -255,7 +273,8 @@ def main(candidates_path: str, artifacts_dir: str = "artifacts"):
 
     # --- Step 3: Load template data (for semantic quote selection) ---
     template_data = load_jd_templates(artifacts_dir)
-    # If template data is missing, semantic quote selection will be skipped.
+    template_summaries = template_data.get('template_summaries', {}) if template_data else {}
+    candidate_templates = template_data.get('candidate_templates', {}) if template_data else {}
 
     # --- Step 4: Build candidate documents ---
     t0 = time.time()
@@ -263,7 +282,10 @@ def main(candidates_path: str, artifacts_dir: str = "artifacts"):
     docs = []
     candidate_ids = []
     for c in tqdm(filtered, desc="Building docs"):
-        doc = build_candidate_doc(c)
+        cid = c['candidate_id']
+        fingerprint = candidate_templates.get(cid)
+        summary = template_summaries.get(fingerprint) if fingerprint else None
+        doc = build_candidate_doc(c, template_summary=summary)
         docs.append(doc)
         candidate_ids.append(c['candidate_id'])
 
@@ -314,33 +336,28 @@ def main(candidates_path: str, artifacts_dir: str = "artifacts"):
     print(f"[precompute] Saved embeddings.npy – shape: {embeddings.shape}, size: {emb_size_mb:.0f}MB")
     print(f"[precompute] Embedding time: {time.time()-t0:.1f}s")
 
-    # --- Step 8: Encode JD query ---
+    # --- Step 8: Encode JD query with "search_query: " prefix ---
     t0 = time.time()
-    print("\n[precompute] Encoding JD query...")
+    print("\n[precompute] Encoding JD query with 'search_query: ' prefix...")
+    prefixed_jd_query = "search_query: " + JD_QUERY
     jd_embedding = model.encode(
-        [JD_QUERY],
+        [prefixed_jd_query],
         convert_to_numpy=True,
-        normalize_embeddings=False,
+        normalize_embeddings=True,
     )
     np.save(artifacts_path / "jd_embedding.npy", jd_embedding[0])
-    print(f"[precompute] Saved jd_embedding.npy")
+    print(f"[precompute] Saved jd_embedding.npy (normalized, prefixed)")
     print(f"[precompute] JD encoding time: {time.time()-t0:.1f}s")
 
     # --- Step 9: Semantic quote selection (golden candidates only) ---
     t0 = time.time()
     print("\n[precompute] Selecting semantic quotes for golden candidates...")
-    # We need to reload the candidate mapping for the filtered candidates
-    # (the filtering step may have reordered or dropped candidates)
-    # We use the original filtered list to build the quote map.
     best_narratives = select_semantic_quotes(
         filtered,
         jd_embedding[0],
         model,
         template_data
     )
-    # Also include template frequency in the output for reasoning
-    # (the rank.py will merge this with the template map)
-    # We store the quote + score directly.
     with open(artifacts_path / "best_narratives.pkl", "wb") as f:
         pickle.dump(best_narratives, f)
     print(f"[precompute] Saved best_narratives.pkl ({len(best_narratives):,} entries)")
