@@ -1,16 +1,31 @@
-# reasoning.py - Organic, signal‑driven reasoning generation (V6).
+# reasoning.py - Organic, signal‑driven reasoning generation (V6.1).
 #
-# V6 changes vs V5:
-#   - Output trimmed to exactly 2 sentences to match submission spec ("1-2 sentence justification").
-#   - Sentence 1: Who they are + top skill/quote fragment + key differentiator signal.
-#   - Sentence 2: Combined multiplier context + one friction/availability note.
-#   - All other logic (helpers, signal names, archetype summaries) unchanged from V5.
+# V6.1: truncate quote at sentence boundary (last '.', '!', '?') before the character limit.
 
 from datetime import date, datetime
 from src.signals import CORE_JD_SKILLS
 
 # ------------------------------------------------------------------------------
-# Helpers (unchanged from V5)
+# Helper: Quote truncation at sentence boundary
+# ------------------------------------------------------------------------------
+
+def truncate_at_sentence_boundary(text: str, max_len: int = 120) -> str:
+    """Truncate text at the last sentence boundary (., !, ?) before max_len."""
+    if len(text) <= max_len:
+        return text
+    # Examine the substring up to max_len
+    sub = text[:max_len]
+    # Find the last occurrence of sentence-ending punctuation
+    for sep in ('.', '!', '?'):
+        last = sub.rfind(sep)
+        if last != -1:
+            # Include the punctuation character
+            return sub[:last + 1]
+    # Fallback: hard truncate with ellipsis
+    return sub + '...'
+
+# ------------------------------------------------------------------------------
+# Other helpers (unchanged from V5/V6)
 # ------------------------------------------------------------------------------
 
 def parse_date(date_str: str) -> date:
@@ -72,7 +87,7 @@ def _get_archetype_summary(candidate: dict, jd_template: dict) -> str:
             return "has a technical background in software/ML"
 
 # ------------------------------------------------------------------------------
-# Main entry point (V6 — 2-sentence output)
+# Main entry point (V6.1 — 2-sentence output)
 # ------------------------------------------------------------------------------
 
 def generate_reasoning(
@@ -142,9 +157,9 @@ def generate_reasoning(
         archetype = _get_archetype_summary(candidate, jd_template)
         s1 = f"{base}; {archetype} with strong {skill_anchor}."
     else:
-        # Quote fragment (truncated tightly)
+        # Quote fragment – now truncated at sentence boundary
         if semantic_quote and len(semantic_quote) > 10:
-            quote_clip = semantic_quote.strip()[:120].rstrip(',. ')
+            quote_clip = truncate_at_sentence_boundary(semantic_quote.strip(), max_len=120)
             s1 = f"{base}; \"{quote_clip}\" — deep {skill_anchor}."
         else:
             s1 = f"{base} with deep {skill_anchor}."
@@ -161,8 +176,8 @@ def generate_reasoning(
     if signal_profile:
         combined = signal_profile.get('combined_multiplier', None)
         if combined:
-            items_sorted = sorted(items, key=lambda x: x[1], reverse=True)
-            top3_names = [_format_signal_name(k) for k, _ in items_sorted[:3]]
+            # Re‑use the already sorted 'items' list
+            top3_names = [_format_signal_name(k) for k, _ in items[:3]]
             s2_parts.append(f"Composite {combined:.2f}x driven by {', '.join(top3_names)}.")
 
     # Friction or availability (one note only)
