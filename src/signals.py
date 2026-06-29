@@ -314,13 +314,13 @@ def jd_template_multiplier(jd_template: dict) -> float:
     elif tier == 'data_eng':
         multiplier = 0.95
     elif tier == 'irrelevant':
-        multiplier = 0
+        multiplier = 0.5
     else:
-        multiplier = 0
+        multiplier = 1
 
-    if DEBUG and _DEBUG_COUNT < 5:
-        print(f"[DEBUG] jd_template_multiplier: tier='{tier}' → multiplier={multiplier}")
-        _DEBUG_COUNT += 1
+    # if DEBUG and _DEBUG_COUNT < 5:
+    #     print(f"[DEBUG] jd_template_multiplier: tier='{tier}' → multiplier={multiplier}")
+    #     _DEBUG_COUNT += 1
     return multiplier
 
 # ------------------------------------------------------------------------------
@@ -356,18 +356,33 @@ def llm_era_penalty(skills: list) -> float:
                 penalty *= 0.85
     return penalty
 
+def domain_mismatch_penalty(summary: str) -> float:
+    if not summary:
+        print("no summary found for domain_mismatch")
+        return 1.0
+    mismatch_phrases = [
+        "exclusively building computer vision",
+        "zero professional NLP",
+        "zero information retrieval",
+        "entirely locked into Computer Vision",
+    ]
+    lower = summary.lower()
+    for phrase in mismatch_phrases:
+        if phrase in lower:
+            return 0.70
+    return 1.0
 # ------------------------------------------------------------------------------
 # Main entry point
 # ------------------------------------------------------------------------------
 
-_DEBUG_SCORE_COUNT = 0
+# _DEBUG_SCORE_COUNT = 0
 
-def compute_final_score(ce_score: float, candidate: dict, jd_template: dict = None) -> tuple:
-    if candidate.get('candidate_id') in ['CAND_0082086']:  # the ID from your top 10
-        print(f"[FINAL DEBUG] candidate: {candidate['candidate_id']}, jd_template is None? {jd_template is None}")
-        if jd_template:
-            print(f"[FINAL DEBUG] tier = {jd_template.get('tier')}")
-    global _DEBUG_SCORE_COUNT
+def compute_final_score(ce_score: float, candidate: dict, jd_template: dict = None,template_summary: str = None) -> tuple:
+    # if candidate.get('candidate_id') in ['CAND_0082086']:  # the ID from your top 10
+    #     print(f"[FINAL DEBUG] candidate: {candidate['candidate_id']}, jd_template is None? {jd_template is None}")
+    #     if jd_template:
+    #         print(f"[FINAL DEBUG] tier = {jd_template.get('tier')}")
+    # global _DEBUG_SCORE_COUNT
     profile = candidate.get('profile', {})
     signals = candidate.get('redrob_signals', {})
     career = candidate.get('career_history', [])
@@ -386,20 +401,25 @@ def compute_final_score(ce_score: float, candidate: dict, jd_template: dict = No
     job_hop = job_hopping_penalty(career)
     gap = career_gap_penalty(profile, career)
     llm = llm_era_penalty(skills)
-
+    domain_penalty = domain_mismatch_penalty(template_summary)
     structured_multiplier = (
         exp * avail * notice * loc * gh * career_q * skill_d *
-        recruiter * jd_mult * job_hop * gap * llm
+        recruiter * jd_mult * job_hop * gap * llm * domain_penalty
     )
+
+    # structured_multiplier = (
+    #     exp * avail * notice * loc * gh * career_q * skill_d *
+    #     recruiter * jd_mult * job_hop * gap * llm
+    # )
 
     final_score = ce_score * structured_multiplier
 
-    if DEBUG and _DEBUG_SCORE_COUNT < 5:
-        print(f"[DEBUG] compute_final_score for candidate {candidate.get('candidate_id', '?')}:")
-        print(f"  jd_mult = {jd_mult:.3f}")
-        print(f"  structured_multiplier = {structured_multiplier:.4f}")
-        print(f"  final_score = {final_score:.4f}")
-        _DEBUG_SCORE_COUNT += 1
+    # if DEBUG and _DEBUG_SCORE_COUNT < 5:
+    #     print(f"[DEBUG] compute_final_score for candidate {candidate.get('candidate_id', '?')}:")
+    #     print(f"  jd_mult = {jd_mult:.3f}")
+    #     print(f"  structured_multiplier = {structured_multiplier:.4f}")
+    #     print(f"  final_score = {final_score:.4f}")
+    #     _DEBUG_SCORE_COUNT += 1
 
     profile_dict = {
         'ce_score': ce_score,
@@ -415,6 +435,7 @@ def compute_final_score(ce_score: float, candidate: dict, jd_template: dict = No
         'job_hopping_penalty': job_hop,
         'career_gap_penalty': gap,
         'llm_era_penalty': llm,
+        'domain_mismatch_penalty': domain_penalty,
         'combined_multiplier': structured_multiplier,
     }
     return final_score, profile_dict
