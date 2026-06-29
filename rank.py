@@ -148,15 +148,15 @@ def main(candidates_path: str, output_path: str, artifacts_dir: str = "artifacts
     template_map = load_template_map(artifacts_dir)
     print(f"[rank] Template map load time: {time.time()-t0:.2f}s")
     print(f"[DEBUG] template_map size: {len(template_map)}")
-    if template_map:
-        sample_cid = next(iter(template_map))
-        sample = template_map[sample_cid]
-        print(f"[DEBUG] Sample candidate: {sample_cid}")
-        print(f"[DEBUG]   tier: {sample.get('tier')}")
-        print(f"[DEBUG]   freq: {sample.get('freq')}")
-        print(f"[DEBUG]   summary: {sample.get('summary')[:50] if sample.get('summary') else 'None'}...")
-    else:
-        print("[DEBUG] template_map is EMPTY! Check load_template_map().")
+    # if template_map:
+    #     sample_cid = next(iter(template_map))
+    #     sample = template_map[sample_cid]
+    #     print(f"[DEBUG] Sample candidate: {sample_cid}")
+    #     print(f"[DEBUG]   tier: {sample.get('tier')}")
+    #     print(f"[DEBUG]   freq: {sample.get('freq')}")
+    #     print(f"[DEBUG]   summary: {sample.get('summary')[:50] if sample.get('summary') else 'None'}...")
+    # else:
+    #     print("[DEBUG] template_map is EMPTY! Check load_template_map().")
 
     # --- Step 3: Load survivor IDs (critical for safe force‑inject) ---
     t0 = time.time()
@@ -237,7 +237,8 @@ def main(candidates_path: str, output_path: str, artifacts_dir: str = "artifacts
             continue
         candidate = candidates[cid]
         jd_info = template_map.get(cid)
-        final_score, signal_profile = compute_final_score(ce_score, candidate, jd_template=jd_info)
+        template_summary = jd_info.get('summary') if jd_info else None
+        final_score, signal_profile = compute_final_score(ce_score, candidate, jd_template=jd_info, template_summary=template_summary)
         final_results.append((cid, final_score, signal_profile))
 
     final_results.sort(key=lambda x: x[1], reverse=True)
@@ -246,10 +247,10 @@ def main(candidates_path: str, output_path: str, artifacts_dir: str = "artifacts
     print(f"[rank] Signal scoring time: {time.time()-t0:.1f}s")
 
     # --- Step 10: Top‑10 golden check ---
-    print("[rank] Top‑10 template tiers:")
-    for cid, _, _ in top_results[:10]:
-        tier = template_map.get(cid, {}).get('tier', 'unknown')
-        print(f"         {cid}  [{tier}]")
+    # print("[rank] Top‑10 template tiers:")
+    # for cid, _, _ in top_results[:10]:
+    #     tier = template_map.get(cid, {}).get('tier', 'unknown')
+    #     print(f"         {cid}  [{tier}]")
 
     # --- Step 11: Generate reasoning and write CSV ---
     t0 = time.time()
