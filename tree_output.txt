@@ -1,0 +1,239 @@
+.
+├── artifacts
+│   ├── bm25_index
+│   │   ├── data.csc.index.npy
+│   │   ├── indices.csc.index.npy
+│   │   ├── indptr.csc.index.npy
+│   │   ├── params.index.json
+│   │   └── vocab.index.json
+│   ├── candidate_ids.npy
+│   ├── embeddings.npy
+│   ├── jd_embedding.npy
+│   ├── jd_query_tokens.pkl
+│   ├── jd_templates_enhanced.pkl
+│   ├── jd_templates.pkl
+│   ├── reranker_optimum
+│   │   ├── added_tokens.json
+│   │   ├── config.json
+│   │   ├── model_int8.onnx
+│   │   ├── special_tokens_map.json
+│   │   ├── tokenizer_config.json
+│   │   └── tokenizer.json
+│   └── skill_duration_percentiles.pkl
+├── candidates.jsonl.gz
+├── dump
+│   ├── artifacts_all
+│   │   ├── artifacts
+│   │   │   ├── best_narratives.pkl
+│   │   │   ├── bm25_index
+│   │   │   │   ├── data.csc.index.npy
+│   │   │   │   ├── indices.csc.index.npy
+│   │   │   │   ├── indptr.csc.index.npy
+│   │   │   │   ├── params.index.json
+│   │   │   │   └── vocab.index.json
+│   │   │   ├── candidate_ids.npy
+│   │   │   ├── embeddings.npy
+│   │   │   ├── full_templates_report.txt
+│   │   │   ├── jd_embedding.npy
+│   │   │   ├── jd_query_tokens.pkl
+│   │   │   ├── skill_duration_percentiles.pkl
+│   │   │   └── templates_summary.txt
+│   │   ├── artifacts3
+│   │   │   ├── best_narratives.pkl
+│   │   │   ├── bm25_index
+│   │   │   │   ├── data.csc.index.npy
+│   │   │   │   ├── indices.csc.index.npy
+│   │   │   │   ├── indptr.csc.index.npy
+│   │   │   │   ├── params.index.json
+│   │   │   │   └── vocab.index.json
+│   │   │   ├── candidate_ids.npy
+│   │   │   ├── embeddings.npy
+│   │   │   ├── jd_embedding.npy
+│   │   │   └── jd_query_tokens.pkl
+│   │   ├── artifacts_test_new
+│   │   │   ├── bm25_index
+│   │   │   │   ├── data.csc.index.npy
+│   │   │   │   ├── indices.csc.index.npy
+│   │   │   │   ├── indptr.csc.index.npy
+│   │   │   │   ├── params.index.json
+│   │   │   │   └── vocab.index.json
+│   │   │   ├── candidate_ids.npy
+│   │   │   ├── embeddings.npy
+│   │   │   ├── jd_embedding.npy
+│   │   │   ├── jd_query_tokens.pkl
+│   │   │   └── test_submission.csv
+│   │   ├── jd_templates_enhanced.pkl
+│   │   └── my_artifacts
+│   │       ├── best_narratives.pkl
+│   │       ├── bm25_index
+│   │       │   ├── data.csc.index.npy
+│   │       │   ├── indices.csc.index.npy
+│   │       │   ├── indptr.csc.index.npy
+│   │       │   ├── params.index.json
+│   │       │   └── vocab.index.json
+│   │       ├── candidate_ids.npy
+│   │       ├── embeddings.npy
+│   │       ├── jd_embedding.npy
+│   │       ├── jd_query_tokens.pkl
+│   │       └── jd_templates.pkl
+│   ├── artifacts_vf
+│   │   ├── bm25_index
+│   │   │   ├── data.csc.index.npy
+│   │   │   ├── indices.csc.index.npy
+│   │   │   ├── indptr.csc.index.npy
+│   │   │   ├── params.index.json
+│   │   │   └── vocab.index.json
+│   │   ├── candidate_ids.npy
+│   │   ├── embeddings.npy
+│   │   ├── jd_embedding.npy
+│   │   ├── jd_query_tokens.pkl
+│   │   └── jd_templates_enhanced.json
+│   ├── Dataset_statistics
+│   │   ├── 00_summary
+│   │   │   ├── dataset_overview.txt
+│   │   │   └── numeric_summary.txt
+│   │   ├── 01_frequencies
+│   │   │   ├── career_history_company_full.txt
+│   │   │   ├── career_history_company_top100.txt
+│   │   │   ├── career_history_industry_freq.txt
+│   │   │   ├── career_history_title_full.txt
+│   │   │   ├── career_history_title_top100.txt
+│   │   │   ├── certification_name_freq.txt
+│   │   │   ├── current_company_full.txt
+│   │   │   ├── current_company_top100.txt
+│   │   │   ├── current_industry_freq.txt
+│   │   │   ├── current_title_full.txt
+│   │   │   ├── current_title_top100.txt
+│   │   │   ├── degree_freq.txt
+│   │   │   ├── field_of_study_freq.txt
+│   │   │   └── preferred_work_mode_freq.txt
+│   │   ├── 02_distributions
+│   │   │   ├── company_size_freq.txt
+│   │   │   ├── education_tier_freq.txt
+│   │   │   ├── open_to_work_flag.txt
+│   │   │   ├── skill_endorsement_avg.txt
+│   │   │   ├── skill_proficiency_crosstab.txt
+│   │   │   └── willing_to_relocate.txt
+│   │   ├── 03_dates
+│   │   │   └── last_active_monthly.txt
+│   │   ├── 04_skills_assessment
+│   │   │   ├── assessed_skill_avg_score.txt
+│   │   │   └── assessed_skill_freq.txt
+│   │   └── 05_salary
+│   │       └── salary_summary.txt
+│   ├── dump_python
+│   │   ├── analyze_candidates.py
+│   │   ├── analyze_jd_templates.py
+│   │   ├── check_company_founding.py
+│   │   ├── check_honeypot_founding.py
+│   │   ├── export_full_templates.py
+│   │   ├── export_templates_summary.py
+│   │   ├── filtersnew.py
+│   │   ├── filters_old.py
+│   │   ├── run_stage0.py
+│   │   ├── test_candidate_doc.py
+│   │   ├── top100_full_dump.txt
+│   │   └── validate_top100.py
+│   ├── report
+│   │   ├── passed.json
+│   │   └── report.json
+│   ├── reports
+│   │   ├── passed.json
+│   │   └── report.json
+│   ├── reranker_model
+│   │   ├── config.json
+│   │   ├── model.safetensors
+│   │   ├── special_tokens_map.json
+│   │   ├── tokenizer_config.json
+│   │   ├── tokenizer.json
+│   │   └── vocab.txt
+│   ├── reranker.onnx
+│   ├── submission.csv
+│   ├── submissionfinal.csv
+│   ├── submissionv10.csv
+│   ├── submissionv11.csv
+│   ├── submissionv1.csv
+│   ├── submissionv3.csv
+│   ├── submissionv5.csv
+│   ├── submissionv6.csv
+│   ├── submissionv7.csv
+│   ├── submissionv8.csv
+│   ├── submissionv9.csv
+│   ├── top100_full_dump.txt
+│   ├── top100_full_dumpv1.txt
+│   └── top100_manual_checkv2.txt
+├── export_onnx_optimum.py
+├── export_onnx.py
+├── export_onnx_safe.py
+├── .gitignore
+├── inspect_pickle.py
+├── my_artifacts
+├── output_analysis.zip
+├── precompute.py
+├── pyproject.toml
+├── .python-version
+├── rank.py
+├── README.md
+├── requirements.txt
+├── reranker.py
+├── sample_artifacts
+│   ├── bm25_index
+│   │   ├── data.csc.index.npy
+│   │   ├── indices.csc.index.npy
+│   │   ├── indptr.csc.index.npy
+│   │   ├── params.index.json
+│   │   └── vocab.index.json
+│   ├── candidate_ids.npy
+│   ├── embeddings.npy
+│   ├── jd_embedding.npy
+│   ├── jd_query_tokens.pkl
+│   ├── jd_templates_enhanced.pkl
+│   ├── jd_templates.pkl
+│   ├── reranker_optimum
+│   │   ├── added_tokens.json
+│   │   ├── config.json
+│   │   ├── model_int8.onnx
+│   │   ├── special_tokens_map.json
+│   │   ├── tokenizer_config.json
+│   │   └── tokenizer.json
+│   └── skill_duration_percentiles.pkl
+├── sample_artifacts2
+│   ├── bm25_index
+│   │   ├── data.csc.index.npy
+│   │   ├── indices.csc.index.npy
+│   │   ├── indptr.csc.index.npy
+│   │   ├── params.index.json
+│   │   └── vocab.index.json
+│   ├── candidate_ids.npy
+│   ├── embeddings.npy
+│   ├── jd_embedding.npy
+│   └── jd_query_tokens.pkl
+├── sample_candidates.jsonl
+├── sample_submission.csv
+├── src
+│   ├── candidate_doc.py
+│   ├── filters.py
+│   ├── __init__.py
+│   ├── reasoning.py
+│   ├── reranker.py
+│   ├── retrieval.py
+│   └── signals.py
+├── submission.csv
+├── team_xxx.csv
+├── test_candidate_doc_build.py
+├── tests
+│   ├── build_template_summaries.py
+│   ├── check_top100_llm_outliers.py
+│   ├── compute_skill_duration_percentiles.py
+│   ├── convert_pkl_to_readable.py
+│   ├── export_top100_for_manual_check.py
+│   ├── extract_top100_complete.py
+│   ├── Job‑Hopping.py
+│   ├── main.py
+│   └── validate_submission.py
+├── test_signals.py
+├── top100_full_dump.txt
+├── tree_output.txt
+└── uv.lock
+
+35 directories, 202 files
