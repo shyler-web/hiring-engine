@@ -137,6 +137,9 @@ def _classify_company(company_name: str, industry: str) -> str:
     ]):
         return 'ai_native'
 
+    if any(p in company_lower for p in PRODUCT_COMPANIES):
+        return 'product'
+    
     if any(c in company_lower for c in CONSULTING_FIRMS):
         return 'consulting'
 
@@ -146,17 +149,18 @@ def _classify_company(company_name: str, industry: str) -> str:
     return 'other'
 
 
-def build_candidate_doc(candidate: dict) -> str:
+def build_candidate_doc(candidate: dict, template_summary: str = None) -> str:
     """
     Build a structured text document for BM25 + embedding retrieval.
     
     Document structure prioritizes:
     1. Headline (concentrated signal)
-    2. Summary (candidate's own words about what they do)
+    2. Role Summary (from template analysis — replaces generic summary)
     3. Career history with company classification (product vs consulting)
     4. Tier-1 skills only with duration (endorsements stripped — noise)
     5. Verified assessments on relevant skills only
     6. Relevant certifications only
+    7. Education (tier_1 and tier_2 only)
     """
     profile = candidate['profile']
     career = candidate.get('career_history', [])
@@ -171,9 +175,11 @@ def build_candidate_doc(candidate: dict) -> str:
     lines.append(profile['headline'])
     lines.append("")
 
-    # --- Section 2: Summary ---
-    lines.append(profile['summary'])
-    lines.append("")
+    # --- Section 1b: Role Summary (from template analysis) ---
+    # This replaces the generic profile['summary'] with a curated role summary
+    if template_summary:
+        lines.append(f"Role Summary: {template_summary}")
+        lines.append("")
 
     # --- Section 3: Career History ---
     # Include company type classification so BM25 can match "product company"
@@ -218,19 +224,25 @@ def build_candidate_doc(candidate: dict) -> str:
         lines.append(f"Core Skills: {', '.join(skill_parts)}")
         lines.append("")
 
-    # Also include tier2 skills but without proficiency/duration detail
+    # Also include tier2 skills with duration and proficiency
     tier2_skills = [
-        s['name'] for s in skills
+        s for s in skills
         if s['name'].lower() in TIER2_SKILLS
         and s['proficiency'] in ('advanced', 'expert')
+        and s.get('duration_months', 0) > 0
     ]
     if tier2_skills:
-        lines.append(f"Supporting Skills: {', '.join(tier2_skills)}")
+        tier2_skills.sort(key=lambda x: x.get('duration_months', 0), reverse=True)
+        skill_parts = [
+            f"{s['name']} ({s.get('duration_months', 0)}mo, {s['proficiency']})"
+            for s in tier2_skills
+        ]
+        lines.append(f"Supporting Skills: {', '.join(skill_parts)}")
         lines.append("")
 
     # --- Section 5: Platform Assessment Scores ---
     # Only include assessments for tier1 skills — others are noise
-    # Assessment mean scores range 51-56, so >60 = above average, >70 = strong
+    # Assessment mean scores range 51-56, so >=50 = above average
     relevant_assessments = {
         k: v for k, v in assessments.items()
         if k.lower() in TIER1_SKILLS and v >= 50

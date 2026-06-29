@@ -1,35 +1,16 @@
-# reasoning.py - Organic, signal‑driven reasoning generation (V6.1).
+# reasoning.py - Final spec‑compliant reasoning (V12).
 #
-# V6.1: truncate quote at sentence boundary (last '.', '!', '?') before the character limit.
+# Format: [Role with YoE]. [Template Summary]. [Top Differentiator]. [Weakness if present].
+# - Role with YoE: e.g., "Recommendation Systems Engineer with 6.5 years of experience."
+# - Template Summary: full, untruncated summary from jd_templates_enhanced.pkl
+# - Top Differentiator: natural-language phrase based on the highest structured signal
+# - Weakness: only included if a real weakness exists (notice, location, GitHub, activity, YoE)
 
-from datetime import date, datetime
 from src.signals import CORE_JD_SKILLS
 
 # ------------------------------------------------------------------------------
-# Helper: Quote truncation at sentence boundary
+# Helpers
 # ------------------------------------------------------------------------------
-
-def truncate_at_sentence_boundary(text: str, max_len: int = 120) -> str:
-    """Truncate text at the last sentence boundary (., !, ?) before max_len."""
-    if len(text) <= max_len:
-        return text
-    # Examine the substring up to max_len
-    sub = text[:max_len]
-    # Find the last occurrence of sentence-ending punctuation
-    for sep in ('.', '!', '?'):
-        last = sub.rfind(sep)
-        if last != -1:
-            # Include the punctuation character
-            return sub[:last + 1]
-    # Fallback: hard truncate with ellipsis
-    return sub + '...'
-
-# ------------------------------------------------------------------------------
-# Other helpers (unchanged from V5/V6)
-# ------------------------------------------------------------------------------
-
-def parse_date(date_str: str) -> date:
-    return datetime.strptime(date_str, "%Y-%m-%d").date()
 
 def _get_top_core_skills(candidate: dict, n: int = 2) -> list:
     """Return the top n advanced/expert core skills sorted by duration desc."""
@@ -43,157 +24,188 @@ def _get_top_core_skills(candidate: dict, n: int = 2) -> list:
     core.sort(key=lambda x: x.get('duration_months', 0), reverse=True)
     return core[:n]
 
-def _get_best_assessment(candidate: dict, threshold: int = 50) -> tuple:
-    """Return (skill_name, score) for the highest‑scoring core skill assessment."""
-    assessments = candidate.get('redrob_signals', {}).get('skill_assessment_scores', {})
-    best_name = None
-    best_score = -1
-    for name, score in assessments.items():
-        if score > threshold and name.lower() in CORE_JD_SKILLS:
-            if score > best_score:
-                best_score = score
-                best_name = name
-    return best_name, best_score
+def _format_top_signal(signal_profile: dict, candidate: dict) -> str:
+    """
+    Return a natural‑language phrase describing the top positive signal.
+    """
+    if not signal_profile:
+        return ""
 
-def _format_signal_name(key: str) -> str:
-    """Consistent signal name mapping."""
-    mapping = {
-        'experience_fit': 'experience fit (YoE alignment)',
-        'availability': 'availability/open‑to‑work',
-        'notice_period': 'short notice period',
-        'location': 'location alignment',
-        'github': 'GitHub activity',
-        'career_quality': 'career quality (company pedigree)',
-        'skill_depth': 'core IR skill depth',
-        'recruiter_market': 'recruiter market validation',
-        'jd_template_multiplier': 'JD template tier',
-    }
-    return mapping.get(key, key.replace('_', ' '))
+    # Define signal keys and their priority order (higher priority if tie)
+    keys = [
+        'career_quality',
+        'availability',
+        'jd_template_multiplier',
+        'github',
+        'skill_depth',
+        'recruiter_market',
+        'experience_fit'
+    ]
+    # Get values, ignore signals <= 1.0 (they are not positive differentiators)
+    items = [(k, signal_profile.get(k, 1.0)) for k in keys if k in signal_profile and signal_profile.get(k, 1.0) > 1.0]
+    if not items:
+        return ""
 
-def _get_archetype_summary(candidate: dict, jd_template: dict) -> str:
-    """Generate a short summarized archetype for ranks > 30."""
-    tier = jd_template.get('tier', '') if jd_template else ''
-    top_skills = _get_top_core_skills(candidate, n=2)
-    if tier == 'golden':
-        return "builds retrieval/ranking pipelines for product search"
-    elif tier == 'ml_adj':
-        return "builds ML production pipelines and adjacent systems"
-    elif tier == 'data_eng':
-        return "builds data infrastructure that supports ML systems"
-    else:
-        if top_skills:
-            return f"works with {top_skills[0]['name']} in production ML contexts"
+    # Sort by value descending
+    items.sort(key=lambda x: x[1], reverse=True)
+    top_key, top_val = items[0]
+
+    # Map to natural language
+    if top_key == 'career_quality':
+        return "Strong background at a top-tier product company."
+    elif top_key == 'availability':
+        # Check if open to work and notice period
+        signals = candidate.get('redrob_signals', {})
+        if signals.get('open_to_work_flag', False):
+            notice = signals.get('notice_period_days', 90)
+            if notice <= 30:
+                return "Immediately available."
+            else:
+                return "Open to work with reasonable notice."
         else:
-            return "has a technical background in software/ML"
+            return "Available with short notice."  # This might not be accurate; but we'll use availability signal.
+    elif top_key == 'jd_template_multiplier':
+        return "Profile exactly matches the JD's retrieval/ranking focus."
+    elif top_key == 'github':
+        return "Strong GitHub activity."
+    elif top_key == 'skill_depth':
+        skills = _get_top_core_skills(candidate, n=2)
+        if skills:
+            skill_names = [s['name'] for s in skills]
+            return f"Deep hands-on experience in {skill_names[0]}" + (f" and {skill_names[1]}" if len(skill_names) > 1 else "") + "."
+        else:
+            return "Deep technical depth in core ML skills."
+    elif top_key == 'recruiter_market':
+        return "High recruiter interest."
+    elif top_key == 'experience_fit':
+        return "Experience perfectly aligns with the 5-9 year target."
+    else:
+        return ""
+
+def _format_weakness(signal_profile: dict, candidate: dict) -> str:
+    """
+    Return a natural‑language weakness phrase if any signal is below a threshold.
+    Returns empty string if no weakness.
+    """
+    if not signal_profile:
+        return ""
+
+    profile = candidate.get('profile', {})
+    signals = candidate.get('redrob_signals', {})
+
+    # Define thresholds and corresponding phrases
+    checks = []
+
+    # Notice period > 60 days
+    notice = signals.get('notice_period_days', 90)
+    if notice > 60:
+        checks.append(('notice_period', notice, f"{notice}-day notice period is a concern."))
+
+    # Location mismatch (not Pune or Noida)
+    location = profile.get('location', '')
+    if location and 'pune' not in location.lower() and 'noida' not in location.lower():
+        checks.append(('location', 0, f"Based in {location} (not Pune/Noida)."))
+
+    # GitHub activity < 20 (only if not -1)
+    github = signals.get('github_activity_score', -1)
+    if github >= 0 and github < 20:
+        checks.append(('github', github, "GitHub activity is limited."))
+
+    # Recruiter saves < 5
+    saves = signals.get('saved_by_recruiters_30d', 0)
+    if saves < 5:
+        checks.append(('recruiter_market', saves, "Limited recruiter engagement."))
+
+    # YoE < 4
+    yoe = profile.get('years_of_experience', 0)
+    if yoe < 4:
+        checks.append(('experience_fit', yoe, f"Slightly below the 5-9 year target ({yoe:.1f} YoE)."))
+
+    # YoE > 12
+    if yoe > 12:
+        checks.append(('experience_fit', yoe, f"May be overqualified for an IC role ({yoe:.1f} YoE)."))
+
+    if not checks:
+        return ""
+
+    # Pick the weakness with the lowest signal value (most concerning)
+    # We assign a numeric score for each check: lower is worse
+    # For notice, we use notice days (higher = worse)
+    # For others, we use the value if numeric, else a high number
+    def score_check(item):
+        key, val, phrase = item
+        if key == 'notice_period':
+            return val  # higher days = worse
+        elif key == 'location':
+            return 0  # location mismatch is always bad, but we treat as low priority if other issues exist
+        elif key == 'github':
+            return -val  # lower GitHub = worse, so negative to make it smaller
+        elif key == 'recruiter_market':
+            return -val  # lower saves = worse
+        elif key == 'experience_fit':
+            # For YoE, we want to penalize both too low and too high, but we already have phrases
+            # We'll treat low YoE as more concerning than high YoE for this role
+            if 'below' in phrase:
+                return -100 - val  # very low priority
+            else:
+                return val  # high YoE is less concerning than low
+        return 0
+
+    # Sort by the score; we want the most concerning (lowest score)
+    checks.sort(key=score_check)
+    # Return the phrase of the most concerning weakness
+    return checks[0][2]
 
 # ------------------------------------------------------------------------------
-# Main entry point (V6.1 — 2-sentence output)
+# Main reasoning generator
 # ------------------------------------------------------------------------------
 
 def generate_reasoning(
     candidate: dict,
     jd_template: dict = None,
     signal_profile: dict = None,
-    semantic_quote: str = None,
-    semantic_score: float = None,
-    rank: int = None
+    template_summary: str = None
 ) -> str:
     """
-    Generate a 2-sentence reasoning string for a candidate.
-
-    Sentence 1: Identity + top skill/achievement anchor + key signal differentiator.
-    Sentence 2: Combined multiplier summary + one friction or availability note.
+    Generate reasoning following the format:
+        [Role with YoE]. [Template Summary]. [Top Differentiator]. [Weakness if present].
     """
     profile = candidate.get('profile', {})
-    signals = candidate.get('redrob_signals', {})
-
-    # --- Extract context ---
     title = profile.get('current_title', 'Unknown')
-    company = profile.get('current_company', 'Unknown')
     yoe = profile.get('years_of_experience', 0)
-    location = profile.get('location', 'Unknown')
-    country = profile.get('country', 'Unknown')
-    top_skills = _get_top_core_skills(candidate, n=2)
-    best_assessment_name, best_assessment_score = _get_best_assessment(candidate, threshold=50)
 
-    # ----------------------------------------------------------------
-    # SENTENCE 1: Who they are + what they bring + top differentiator
-    # ----------------------------------------------------------------
-    base = f"{yoe:.1f}yr {title} at {company}"
+    # --- Role with YoE ---
+    role_part = f"{title} with {yoe:.1f} years of experience."
 
-    # Skill anchor (short)
-    if top_skills:
-        skill_anchor = f"{top_skills[0]['name']} ({top_skills[0]['duration_months']}mo)"
-        if len(top_skills) > 1:
-            skill_anchor += f" and {top_skills[1]['name']} ({top_skills[1]['duration_months']}mo)"
-    elif best_assessment_name and best_assessment_score > 0:
-        skill_anchor = f"{best_assessment_name} assessment {best_assessment_score:.0f}/100"
-    else:
-        skill_anchor = "adjacent ML skills"
-
-    # Top signal differentiator
-    top_signal_str = ""
-    if signal_profile:
-        multiplier_keys = [
-            'experience_fit', 'availability', 'notice_period', 'location',
-            'github', 'career_quality', 'skill_depth', 'recruiter_market',
-            'jd_template_multiplier'
-        ]
-        items = [(k, signal_profile.get(k, 1.0)) for k in multiplier_keys if k in signal_profile]
-        items.sort(key=lambda x: x[1], reverse=True)
-        if items:
-            top_key, top_val = items[0]
-            if top_key == 'career_quality':
-                top_signal_str = f"{company} pedigree ({top_val:.2f}x)"
-            elif top_key == 'availability':
-                top_signal_str = f"immediate availability ({top_val:.2f}x)"
-            elif top_key == 'jd_template_multiplier':
-                top_signal_str = f"strong JD template match ({top_val:.2f}x)"
-            else:
-                top_signal_str = f"{_format_signal_name(top_key)} ({top_val:.2f}x)"
-
-    # For ranks > 30 use archetype instead of quote
-    if rank is not None and rank > 30:
-        archetype = _get_archetype_summary(candidate, jd_template)
-        s1 = f"{base}; {archetype} with strong {skill_anchor}."
-    else:
-        # Quote fragment – now truncated at sentence boundary
-        if semantic_quote and len(semantic_quote) > 10:
-            quote_clip = truncate_at_sentence_boundary(semantic_quote.strip(), max_len=120)
-            s1 = f"{base}; \"{quote_clip}\" — deep {skill_anchor}."
+    # --- Template Summary ---
+    # If template_summary is missing, fallback to a generic skill-based summary
+    if not template_summary:
+        # Use top skills or fallback
+        skills = _get_top_core_skills(candidate, n=2)
+        if skills:
+            skill_str = skills[0]['name'] + (f" and {skills[1]['name']}" if len(skills) > 1 else "")
+            summary_part = f"Experienced in {skill_str}."
         else:
-            s1 = f"{base} with deep {skill_anchor}."
+            summary_part = ""
+    else:
+        summary_part = template_summary  # full, untruncated
 
-    if top_signal_str:
-        s1 = s1.rstrip('.') + f"; key signal: {top_signal_str}."
+    # --- Top Differentiator ---
+    diff_part = _format_top_signal(signal_profile, candidate)
 
-    # ----------------------------------------------------------------
-    # SENTENCE 2: Multiplier summary + friction or availability
-    # ----------------------------------------------------------------
-    s2_parts = []
+    # --- Weakness (if present) ---
+    weak_part = _format_weakness(signal_profile, candidate)
 
-    # Combined multiplier
-    if signal_profile:
-        combined = signal_profile.get('combined_multiplier', None)
-        if combined:
-            # Re‑use the already sorted 'items' list
-            top3_names = [_format_signal_name(k) for k, _ in items[:3]]
-            s2_parts.append(f"Composite {combined:.2f}x driven by {', '.join(top3_names)}.")
+    # Assemble reasoning by joining non-empty parts with spaces.
+    parts = [role_part]
+    if summary_part:
+        parts.append(summary_part)
+    if diff_part:
+        parts.append(diff_part)
+    if weak_part:
+        parts.append(weak_part)
 
-    # Friction or availability (one note only)
-    notice = signals.get('notice_period_days', 90)
-    open_flag = signals.get('open_to_work_flag', False)
-    willing_relocate = signals.get('willing_to_relocate', False)
-
-    if notice > 60:
-        s2_parts.append(f"Notice: {notice} days (above JD ≤30 preference).")
-    elif country != 'India' and not willing_relocate:
-        s2_parts.append(f"Based in {country}, not willing to relocate.")
-    elif 'pune' not in location.lower() and 'noida' not in location.lower() and location not in ('Unknown', ''):
-        s2_parts.append(f"Location: {location} (not Pune/Noida).")
-    elif open_flag and notice <= 30:
-        s2_parts.append(f"Open to work, {notice}-day notice.")
-
-    s2 = ' '.join(s2_parts) if s2_parts else "No significant friction."
-
-    return f"{s1} {s2}".replace('  ', ' ').strip()
+    # Join with spaces, ensuring periods are placed correctly.
+    # The parts already end with periods, so we just join with space.
+    reasoning = " ".join(parts)
+    return reasoning

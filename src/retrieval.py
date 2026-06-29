@@ -31,7 +31,7 @@ def bm25_search(
     retriever: bm25s.BM25,
     jd_tokens,
     candidate_ids: np.ndarray,
-    k: int = 1000
+    k: int = 2000
 ) -> list:
     """BM25 lexical search. Returns list of candidate_ids ranked by BM25 score."""
     actual_k = min(k, len(candidate_ids))
@@ -43,7 +43,7 @@ def semantic_search(
     embeddings: np.ndarray,
     jd_embedding: np.ndarray,
     candidate_ids: np.ndarray,
-    k: int = 1000
+    k: int = 2000
 ) -> list:
     """
     Semantic search using FAISS IndexFlatIP (cosine similarity after L2 normalization).
@@ -84,7 +84,7 @@ def reciprocal_rank_fusion(ranked_lists: list, k: int = 60) -> list:
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
 
-def hybrid_retrieve(artifacts_dir: str = "artifacts", top_k: int = 1000) -> list:
+def hybrid_retrieve(artifacts_dir: str = "artifacts", top_k: int = 2000) -> list:
     """
     Full hybrid retrieval pipeline.
     Returns list of top_k candidate_ids ranked by RRF fusion score.
