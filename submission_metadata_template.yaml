@@ -1,0 +1,87 @@
+# ============================================================================
+# Team identity
+# ============================================================================
+team_name: "InferenceEngine"  
+
+primary_contact:
+  name: "Kanhaiya Panjiyar"
+  email: "kanhaiyahss22110@gmail.com"  
+  phone: "+91-7896415602"       
+team_members:
+  - name: "Kanhaiya Panjiyar"
+    email: "kanhaiyahss22110@gmail.com"
+    role: "Student @ IIT Jodhpur"          
+# ============================================================================
+# Code and reproducibility
+# ============================================================================
+github_repo: "https://github.com/shyler-web/hiring-engine/"
+sandbox_link: "https://colab.research.google.com/drive/1lUH0R8_eM5-wQqr87dlcPSq5xp2lBtLB?usp=sharing"
+reproduce_command: "python rank.py --candidates ./candidates.jsonl --out ./team_InferenceEngine.csv"
+# ============================================================================
+# Compute environment
+# ============================================================================
+compute:
+  platform: "WSL2 Ubuntu on Windows(HP Victus)"                    
+  cpu_cores: 14                                  
+  ram_gb: 16                                    
+  python_version: "3.12.3"                      
+  os: "Ubuntu 24.04.4 LTS"                      
+  uses_gpu_for_inference: false                 
+  has_network_during_ranking: false             
+  pre_computation_required: true               e
+  pre_computation_time_minutes: 15               
+
+# ============================================================================
+# AI tools declaration
+# ============================================================================
+ai_tools_used:
+  - "Claude"        
+  - "GitHub Copilot"
+  - "Deepseek"
+  - "Kimi 2.6"
+  - "Gemini Deep Research"
+
+ai_usage_summary: |
+  Used a combination of AI tools throughout development. Gemini Deep Research
+  for initial architecture research and literature review. Claude Sonnet for
+  first-iteration code inspection, ONNX INT8 quantization implementation and
+  debugging, and iterative improvement of the full pipeline. Kimi 2.6 for
+  architecture decisions and cross-validation of approaches. DeepSeek for
+  the majority of technical discussions, code review, and pipeline design
+  decisions. GitHub Copilot for routine bug fixes and code completion.
+  All AI tools were used as engineering aids — architecture decisions,
+  debugging, and design tradeoffs were driven by human judgment throughout.
+  No premium subscriptions used.
+
+# ============================================================================
+# Approach summary (optional but recommended)
+# ============================================================================
+methodology_summary: |
+  Hybrid BM25 + semantic retrieval (nomic-embed-text-v1.5) fused via
+  Reciprocal Rank Fusion retrieves 2,000 candidates from 100K. A
+  mxbai-rerank-xsmall-v1 cross-encoder quantized to INT8 via raw
+  torch.onnx export and onnxruntime.quantization (bypassing optimum)
+  reranks the top 500 on CPU in under 3 minutes using under 1.8GB RAM
+  with zero network calls. Pre-filtering reduces 100K to 5-8K survivors
+  via honeypot detection (impossible skill durations, timeline
+  contradictions, fictional companies), hard filters (YoE, location),
+  and JD template analysis (44 unique templates discovered, 82K
+  irrelevant candidates dropped). Structured signal scoring applies
+  dataset-calibrated multipliers: YoE fit, notice period, location,
+  GitHub activity, career quality (FAANG +1.35x, consulting 0.85x),
+  skill depth (advanced skills verified >=12 months, rare skills
+  weighted higher), and recruiter market signals. Final score combines
+  ce_score x structured_multiplier. Reasoning is non-templated: role
+  with YoE, template summary, top differentiator, and honest friction
+  where present. Ranking step runs in under 3 minutes on CPU, uses
+  under the given RAM Constraint, and makes zero network calls.
+
+# ============================================================================
+# Declarations
+# ============================================================================
+declarations:
+  read_submission_spec: true        
+  code_is_original_work: true       
+  no_collusion: true                
+  honeypot_check_done: true         
+  reproduction_tested: true         
