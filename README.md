@@ -1,61 +1,128 @@
-# Redrob Candidate Ranker
+# Candidate Ranker — Intelligent Candidate Discovery & Ranking Challenge
 
-Two-stage hybrid retrieval pipeline for the Intelligent Candidate Discovery & Ranking Challenge.
+Two-stage hybrid retrieval pipeline for large-scale candidate ranking on CPU.
 
 ## Architecture
 
 ```
 100K candidates
     ↓
-[Pre-filter] Honeypot detection + hard business rules → ~70-85K
+[Pre-filter] Honeypot detection + hard business rules → ~5-8K survivors
     ↓
-[Stage 1] BM25 (bm25s) + Semantic (nomic-embed-text-v1.5) fused via RRF → top 1000
+[Stage 1] BM25 (bm25s) + Semantic (nomic-embed-text-v1.5) fused via RRF → top 500
     ↓
-[Stage 2] Cross-encoder re-ranking (mxbai-rerank-xsmall-v1) → scored top 1000
+[Stage 2] Cross-encoder reranking (mxbai-rerank-xsmall-v1, INT8 ONNX) → scored top 500
     ↓
-[Stage 3] Structured signal scoring (availability, notice, location, github, career quality)
+[Stage 3] Structured signal scoring (YoE fit, notice period, location, GitHub, career quality)
     ↓
 Top 100 with per-candidate reasoning
 ```
 
 ## Key Design Decisions
 
-- **nomic-embed-text-v1.5**: 8192 token window avoids chunking full candidate profiles
-- **bm25s**: Scipy-backed sparse retrieval, orders of magnitude faster than Python BM25
-- **RRF fusion**: Ordinal rank fusion avoids score normalization across incompatible scales
-- **Structured signals**: Cross-encoder scores text fit; structured multipliers adjust for
-  availability, notice period, location, GitHub activity, and career quality (product vs consulting)
-- **Honeypot detection**: Pre-filters impossible profiles before they contaminate retrieval
-- **Calibrated thresholds**: All signal weights derived from actual 100K dataset percentile stats
+- **nomic-embed-text-v1.5** — 8192 token window avoids chunking full candidate profiles
+- **bm25s** — Scipy-backed sparse retrieval, significantly faster than pure Python BM25
+- **RRF fusion** — Ordinal rank fusion avoids score normalization across incompatible scales
+- **INT8 ONNX reranker** — mxbai-rerank-xsmall-v1 exported via torch.onnx and quantized with onnxruntime.quantization. ~3x faster on CPU with minimal accuracy loss
+- **Structured signals** — Cross-encoder scores text fit; multipliers adjust for YoE fit, notice period, location, GitHub activity, and career quality (FAANG/product vs consulting)
+- **Honeypot detection** — Pre-filters impossible profiles (timeline contradictions, fictional companies, impossible skill durations) before they contaminate retrieval
+- **Calibrated thresholds** — All signal weights derived from actual dataset percentile statistics
+
+---
 
 ## Setup
 
+### Option A — pip (verified in sandbox)
 ```bash
+pip install .
+```
+
+### Option B — uv (recommended, exact version pinning via uv.lock)
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-## Precompute (artifacts already committed — skip this)
+---
+
+## Ranking — Single Command
+
+### With pip
+```bash
+CUDA_VISIBLE_DEVICES="" python rank.py \
+    --candidates candidates.jsonl.gz \
+    --out InferenceEngine.csv
+```
+
+### With uv
+```bash
+CUDA_VISIBLE_DEVICES="" uv run python rank.py \
+    --candidates candidates.jsonl.gz \
+    --out InferenceEngine.csv
+```
+
+Completes in ~140 seconds on 16-core CPU. Uses ~1.8GB RAM. Zero network calls.
+
+---
+
+## Validate Output
+```bash
+python scripts/validate_submission.py InferenceEngine.csv
+```
+
+---
+
+## Sandbox — 100 Candidate Sample
+
+Sample candidates and artifacts are committed for quick verification:
+```bash
+CUDA_VISIBLE_DEVICES="" python rank.py \
+    --candidates sample_candidates.jsonl \
+    --artifacts sample_artifacts \
+    --out submission_sample.csv
+```
+
+Full sandbox notebook: [Google Colab](YOUR_COLAB_LINK_HERE)
+
+---
+
+## Pre-computation (already done — artifacts committed to repo)
+
+> ⚠️ Judges skip this entire section. All artifacts are precomputed and committed.
+
+To reproduce from scratch (authors only):
 
 ```bash
+# Step 1 — Analyse JD templates (produces jd_templates.pkl)
+uv run python scripts/analyze_jd_templates.py --candidates candidates.jsonl.gz
+
+# Step 2 — Build template summaries (depends on Step 1, produces jd_templates_enhanced.pkl)
+uv run python scripts/build_template_summaries.py
+
+# Step 3 — Compute skill duration percentiles (produces skill_duration_percentiles.pkl)
+uv run python scripts/compute_skill_duration_percentiles.py --candidates candidates.jsonl.gz
+
+# Step 4 — Build BM25 index and embeddings (depends on Steps 2 and 3)
 uv run python precompute.py --candidates candidates.jsonl.gz
+
+# Step 5 — Export and quantize reranker to INT8 ONNX (authors only)
+# Requires: huggingface-cli download mixedbread-ai/mxbai-rerank-xsmall-v1
+uv run python scripts/export_onnx.py
 ```
 
-## Rank
+---
 
-```bash
-uv run python rank.py --candidates /path/to/candidates.jsonl.gz --out team_xxx.csv
-```
+## Compute Environment
 
-## Validate
+| Constraint | Limit | Actual |
+|---|---|---|
+| Runtime | ≤ 5 minutes | ~140 seconds |
+| Memory | ≤ 16 GB RAM | ~1.8 GB peak |
+| GPU | CPU only | Disabled via CUDA_VISIBLE_DEVICES="" |
+| Network | Off during ranking | Zero external calls |
+| Disk | ≤ 5 GB artifacts | ~500 MB |
 
-```bash
-uv run python validate_submission.py team_xxx.csv
-```
-
-## Environment
-
-- Python 3.11
-- CPU only, no GPU required
-- RAM: ~1.8 GB peak
-- Runtime: ~16 seconds (with precomputed artifacts)
-- OS tested: Ubuntu 22.04 (WSL2)
+- Python 3.12
+- OS: Ubuntu 24.04 LTS (WSL2 on Windows)
+- Hardware: HP Victus, 16-core CPU, 16GB RAM
+- ONNX inference: 12 intra-op threads + 2 inter-op threads
