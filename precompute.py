@@ -13,7 +13,6 @@
 #     jd_embedding.npy         — JD query embedding (normalized)
 #     bm25_index/              — BM25 index (saved via bm25s)
 #     jd_query_tokens.pkl      — tokenized JD query for BM25
-#     best_narratives.pkl      — semantic quotes + scores for golden candidates
 
 import argparse
 import gzip
@@ -31,6 +30,8 @@ from sentence_transformers import SentenceTransformer
 from src.filters import filter_candidates
 from src.candidate_doc import build_candidate_doc
 from src.reranker import JD_QUERY
+# from src.reranker import export_to_onnx
+
 
 # ------------------------------------------------------------------------------
 # Constants
@@ -40,18 +41,8 @@ ARTIFACTS_DIR = Path("artifacts")
 BATCH_SIZE = 64
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 
-# Golden template classification threshold (must match rank.py)
-GOLDEN_MAX_FREQ = 41
-
-
-def classify_template(freq: int) -> str:
-    if freq <= GOLDEN_MAX_FREQ:
-        return 'golden'
-    return 'other'
-
-
 # ------------------------------------------------------------------------------
-# Text helpers (must match analyze_jd_templates.py)
+# Text helpers (only used for JD fingerprint, kept for compatibility)
 # ------------------------------------------------------------------------------
 
 def normalize_sentence(sent: str) -> str:
@@ -61,13 +52,11 @@ def normalize_sentence(sent: str) -> str:
     sent = re.sub(r'\s+', ' ', sent).strip()
     return sent
 
-
 def extract_sentences(text: str) -> list:
     if not text:
         return []
     raw = re.split(r'[.!?\n]', text)
     return [s.strip() for s in raw if len(s.strip()) > 15]
-
 
 def get_jd_fingerprint(job_desc: str) -> str:
     sents = extract_sentences(job_desc)
@@ -75,26 +64,6 @@ def get_jd_fingerprint(job_desc: str) -> str:
         return ""
     normalized = [normalize_sentence(s) for s in sents]
     return " | ".join(normalized)
-
-
-def truncate_quote(quote: str, max_words: int = 30) -> str:
-    """
-    Truncate a quote at a sentence boundary (., !, ?) to avoid mid‑sentence cutoffs.
-    Returns the truncated quote with an ellipsis if shortened.
-    """
-    words = quote.split()
-    if len(words) <= max_words:
-        return quote
-
-    truncated = ' '.join(words[:max_words])
-
-    for sep in ['.', '!', '?']:
-        last_boundary = truncated.rfind(sep)
-        if last_boundary != -1:
-            return truncated[:last_boundary + 1] + '...'
-
-    return truncated + '...'
-
 
 # ------------------------------------------------------------------------------
 # Loading
@@ -115,137 +84,22 @@ def load_candidates(path: str) -> list:
     print(f"[precompute] Loaded {len(candidates):,} candidates from {path}")
     return candidates
 
-
 def load_jd_templates(artifacts_dir: str) -> dict:
     """
-    Load jd_templates.pkl and build:
-        - template_counter: fingerprint -> frequency
-        - candidate_templates: candidate_id -> fingerprint
+    Load jd_templates_enhanced.pkl (or fallback to jd_templates.pkl)
+    and return the full data dict.
     """
-    pkl_path = Path(artifacts_dir) / "jd_templates.pkl"
+    pkl_path = Path(artifacts_dir) / "jd_templates_enhanced.pkl"
     if not pkl_path.exists():
-        print("[precompute] WARNING: jd_templates.pkl not found. "
-              "Semantic quote selection will be skipped.")
-        return {}
-
+        print("[precompute] WARNING: jd_templates_enhanced.pkl not found, falling back to jd_templates.pkl")
+        pkl_path = Path(artifacts_dir) / "jd_templates.pkl"
+        if not pkl_path.exists():
+            print("[precompute] WARNING: No template pickle found. Semantic summaries unavailable.")
+            return {}
     with open(pkl_path, "rb") as f:
         data = pickle.load(f)
-
-    template_counter = data.get('template_counter', {})
-    candidate_templates = data.get('candidate_templates', {})
-
-    print(f"[precompute] Loaded template map: {len(template_counter):,} unique templates, "
-          f"{len(candidate_templates):,} candidates mapped")
-    return {
-        'template_counter': template_counter,
-        'candidate_templates': candidate_templates,
-    }
-
-
-# ------------------------------------------------------------------------------
-# Semantic quote selection (UPDATED)
-# ------------------------------------------------------------------------------
-
-def select_semantic_quotes(
-    candidates: list,
-    jd_embedding: np.ndarray,
-    model: SentenceTransformer,
-    template_data: dict
-) -> dict:
-    """
-    For each golden candidate (template freq <= 41), extract sentences from
-    their current JD, encode them with the proper "search_document: " prefix,
-    compute cosine similarity to the JD query (encoded with "search_query: "),
-    and store the best (quote, score).
-
-    Returns:
-        {candidate_id: {'semantic_quote': str, 'semantic_score': float}}
-    """
-    if not template_data:
-        print("[precompute] No template data – skipping semantic quote selection.")
-        return {}
-
-    template_counter = template_data.get('template_counter', {})
-    candidate_templates = template_data.get('candidate_templates', {})
-
-    # Identify golden candidates
-    golden_candidates = []
-    for cid, fingerprint in candidate_templates.items():
-        freq = template_counter.get(fingerprint, 0)
-        if freq <= GOLDEN_MAX_FREQ:
-            golden_candidates.append(cid)
-
-    if not golden_candidates:
-        print("[precompute] No golden candidates found – skipping semantic quote selection.")
-        return {}
-
-    print(f"[precompute] Selecting semantic quotes for {len(golden_candidates):,} golden candidates...")
-
-    cand_map = {c['candidate_id']: c for c in candidates}
-
-    results = {}
-    # The JD embedding is already normalized from encoding with 'search_query: ' prefix.
-    jd_vec = jd_embedding.reshape(1, -1)
-    jd_norm = jd_vec / np.linalg.norm(jd_vec, axis=1, keepdims=True)
-
-    for cid in tqdm(golden_candidates, desc="Semantic quotes"):
-        candidate = cand_map.get(cid)
-        if not candidate:
-            continue
-
-        career = candidate.get('career_history', [])
-        if not career:
-            continue
-
-        current_job = career[0]
-        desc = current_job.get('description', '')
-        if not desc:
-            continue
-
-        sentences = extract_sentences(desc)
-        if not sentences:
-            continue
-
-        # Fix: Add "search_document: " prefix and normalize for cosine similarity.
-        prefixed_sentences = [f"search_document: {s}" for s in sentences]
-
-        try:
-            embeds = model.encode(
-                prefixed_sentences,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
-        except Exception as e:
-            # Fallback: encode one by one
-            embeds = []
-            for prefixed_sent in prefixed_sentences:
-                try:
-                    e = model.encode(prefixed_sent, convert_to_numpy=True, normalize_embeddings=True)
-                    embeds.append(e)
-                except Exception:
-                    embeds.append(np.zeros(model.get_sentence_embedding_dimension()))
-            embeds = np.array(embeds)
-
-        similarities = embeds @ jd_norm.T
-        similarities = similarities.flatten()
-
-        best_idx = np.argmax(similarities)
-        best_score = float(similarities[best_idx])
-        best_quote_raw = sentences[best_idx]
-
-        # Truncate at sentence boundary
-        best_quote_clean = truncate_quote(best_quote_raw, max_words=30)
-
-        if best_score > 0.3:
-            results[cid] = {
-                'semantic_quote': best_quote_clean,
-                'semantic_score': best_score,
-            }
-
-    print(f"[precompute] Extracted semantic quotes for {len(results):,} golden candidates")
-    return results
-
+    print(f"[precompute] Loaded template data from {pkl_path.name}")
+    return data
 
 # ------------------------------------------------------------------------------
 # Main
@@ -271,10 +125,13 @@ def main(candidates_path: str, artifacts_dir: str = "artifacts"):
     if len(filtered) == 0:
         raise ValueError("All candidates were filtered out. Check filters.py.")
 
-    # --- Step 3: Load template data (for semantic quote selection) ---
+    # --- Step 3: Load template data (for summaries) ---
+    t0 = time.time()
     template_data = load_jd_templates(artifacts_dir)
     template_summaries = template_data.get('template_summaries', {}) if template_data else {}
     candidate_templates = template_data.get('candidate_templates', {}) if template_data else {}
+    print(f"[precompute] Loaded {len(template_summaries):,} template summaries")
+    print(f"[precompute] Template data load time: {time.time()-t0:.1f}s")
 
     # --- Step 4: Build candidate documents ---
     t0 = time.time()
@@ -283,11 +140,12 @@ def main(candidates_path: str, artifacts_dir: str = "artifacts"):
     candidate_ids = []
     for c in tqdm(filtered, desc="Building docs"):
         cid = c['candidate_id']
+        # Look up fingerprint and summary
         fingerprint = candidate_templates.get(cid)
         summary = template_summaries.get(fingerprint) if fingerprint else None
         doc = build_candidate_doc(c, template_summary=summary)
         docs.append(doc)
-        candidate_ids.append(c['candidate_id'])
+        candidate_ids.append(cid)
 
     candidate_ids_arr = np.array(candidate_ids)
     np.save(artifacts_path / "candidate_ids.npy", candidate_ids_arr)
@@ -330,6 +188,7 @@ def main(candidates_path: str, artifacts_dir: str = "artifacts"):
         convert_to_numpy=True,
         normalize_embeddings=False,  # we normalize at retrieval time
     )
+    
 
     np.save(artifacts_path / "embeddings.npy", embeddings)
     emb_size_mb = embeddings.nbytes / (1024 * 1024)
@@ -348,22 +207,10 @@ def main(candidates_path: str, artifacts_dir: str = "artifacts"):
     np.save(artifacts_path / "jd_embedding.npy", jd_embedding[0])
     print(f"[precompute] Saved jd_embedding.npy (normalized, prefixed)")
     print(f"[precompute] JD encoding time: {time.time()-t0:.1f}s")
+    # export_to_onnx(artifacts_dir=artifacts_dir)
+    # print(f"[precompute] Exported reranker to ONNX format")
 
-    # --- Step 9: Semantic quote selection (golden candidates only) ---
-    t0 = time.time()
-    print("\n[precompute] Selecting semantic quotes for golden candidates...")
-    best_narratives = select_semantic_quotes(
-        filtered,
-        jd_embedding[0],
-        model,
-        template_data
-    )
-    with open(artifacts_path / "best_narratives.pkl", "wb") as f:
-        pickle.dump(best_narratives, f)
-    print(f"[precompute] Saved best_narratives.pkl ({len(best_narratives):,} entries)")
-    print(f"[precompute] Semantic quote selection time: {time.time()-t0:.1f}s")
-
-    # --- Step 10: Summary ---
+    # --- Step 9: Summary ---
     total_time = time.time() - total_start
     print("\n" + "="*60)
     print("PRECOMPUTATION COMPLETE")
@@ -378,7 +225,6 @@ def main(candidates_path: str, artifacts_dir: str = "artifacts"):
         if f.is_file():
             size_kb = f.stat().st_size / 1024
             print(f"    {f} ({size_kb:.0f} KB)")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
