@@ -51,23 +51,23 @@ uv sync
 ```bash
 CUDA_VISIBLE_DEVICES="" python rank.py \
     --candidates candidates.jsonl.gz \
-    --out InferenceEngine.csv
+    --out team_InferenceEngine.csv
 ```
 
 ### With uv
 ```bash
 CUDA_VISIBLE_DEVICES="" uv run python rank.py \
     --candidates candidates.jsonl.gz \
-    --out InferenceEngine.csv
+    --out team_InferenceEngine.csv
 ```
 
-Completes in ~140 seconds on 16-core CPU. Uses ~1.8GB RAM. Zero network calls.
+Completes in ~160 seconds on 16-core CPU . Zero network calls.
 
 ---
 
 ## Validate Output
 ```bash
-python scripts/validate_submission.py InferenceEngine.csv
+python scripts/validate_submission.py team_InferenceEngine.csv
 ```
 
 ---
@@ -79,10 +79,10 @@ Sample candidates and artifacts are committed for quick verification:
 CUDA_VISIBLE_DEVICES="" python rank.py \
     --candidates sample_candidates.jsonl \
     --artifacts sample_artifacts \
-    --out submission_sample.csv
+    --out team_InferenceEngine_submission_sample.csv
 ```
 
-Full sandbox notebook: [Google Colab](YOUR_COLAB_LINK_HERE)
+Full sandbox notebook: [Google Colab](https://colab.research.google.com/drive/1lUH0R8_eM5-wQqr87dlcPSq5xp2lBtLB?usp=sharing)
 
 ---
 
@@ -122,7 +122,7 @@ uv run python scripts/export_onnx.py
 | Network | Off during ranking | Zero external calls |
 | Disk | ≤ 5 GB artifacts | ~500 MB |
 
-- Python 3.12
+- Python 3.12.3
 - OS: Ubuntu 24.04 LTS (WSL2 on Windows)
 - Hardware: HP Victus, 16-core CPU, 16GB RAM
 - ONNX inference: 12 intra-op threads + 2 inter-op threads
