@@ -151,7 +151,6 @@ hiring-engine/
 ├── uv.lock
 ├── rank.py
 ├── precompute.py
-├── candidates.jsonl.gz
 ├── sample_candidates.jsonl
 ├── team_InferenceEngine.csv
 ├── team_InferenceEngine_submission_sample.csv
@@ -168,6 +167,4 @@ hiring-engine/
 │   ├── compute_skill_duration_percentiles.py
 │   ├── export_onnx.py
 │   └── validate_submission.py
-└── notebooks/
-    └── sandbox.ipynb
 ```
