@@ -142,29 +142,74 @@ uv run python scripts/export_onnx.py
 - Hardware: HP Victus, 16-core CPU, 16GB RAM
 - ONNX inference: 12 intra-op threads + 2 inter-op threads
 
-## Project Structure
+# Repository Structure
 
 ```text
 hiring-engine/
-├── README.md
-├── pyproject.toml
-├── uv.lock
-├── rank.py
+├── artifacts/
+│   ├── bm25_index/
+│   │   ├── data.csc.index.npy
+│   │   ├── indices.csc.index.npy
+│   │   ├── indptr.csc.index.npy
+│   │   ├── params.index.json
+│   │   └── vocab.index.json
+│   ├── candidate_ids.npy
+│   ├── embeddings.npy
+│   ├── jd_embedding.npy
+│   ├── jd_query_tokens.pkl
+│   ├── jd_templates_enhanced.pkl
+│   ├── jd_templates.pkl
+│   ├── reranker_optimum/
+│   │   ├── added_tokens.json
+│   │   ├── config.json
+│   │   ├── model_int8.onnx
+│   │   ├── special_tokens_map.json
+│   │   ├── tokenizer_config.json
+│   │   └── tokenizer.json
+│   └── skill_duration_percentiles.pkl
+├── .gitignore
+├── .python-version
 ├── precompute.py
-├── sample_candidates.jsonl
-├── team_InferenceEngine.csv
-├── team_InferenceEngine_submission_sample.csv
+├── pyproject.toml
+├── rank.py
+├── README.md
 ├── sample_artifacts/
 │   ├── bm25_index/
-│   ├── embeddings/
-│   ├── jd_templates.pkl
+│   │   ├── data.csc.index.npy
+│   │   ├── indices.csc.index.npy
+│   │   ├── indptr.csc.index.npy
+│   │   ├── params.index.json
+│   │   └── vocab.index.json
+│   ├── candidate_ids.npy
+│   ├── embeddings.npy
+│   ├── jd_embedding.npy
+│   ├── jd_query_tokens.pkl
 │   ├── jd_templates_enhanced.pkl
-│   ├── skill_duration_percentiles.pkl
-│   └── reranker/
+│   ├── jd_templates.pkl
+│   ├── reranker_optimum/
+│   │   ├── added_tokens.json
+│   │   ├── config.json
+│   │   ├── model_int8.onnx
+│   │   ├── special_tokens_map.json
+│   │   ├── tokenizer_config.json
+│   │   └── tokenizer.json
+│   └── skill_duration_percentiles.pkl
+├── sample_candidates.jsonl
 ├── scripts/
 │   ├── analyze_jd_templates.py
 │   ├── build_template_summaries.py
 │   ├── compute_skill_duration_percentiles.py
 │   ├── export_onnx.py
 │   └── validate_submission.py
-```
+├── src/
+│   ├── __init__.py
+│   ├── candidate_doc.py
+│   ├── filters.py
+│   ├── reasoning.py
+│   ├── reranker.py
+│   ├── retrieval.py
+│   └── signals.py
+├── submission_metadata_template.yaml
+├── team_InferenceEngine.csv
+├── tree_output.txt
+└── uv.lock
