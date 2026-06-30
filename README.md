@@ -34,7 +34,10 @@ Top 100
 ## Setup
 ---
 
-### First clone the github repo then do the following depending on comfortablibity with pip or uv
+### Step1:Clone the github repo 
+### Step2:Place the camdidates.jsonl.gz file at the project root not doing so would throw error
+### Intall dependencies depending on whether using pip or uv through the given commands
+### Run the command for ranking
 
 ---
 
