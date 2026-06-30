@@ -32,7 +32,7 @@ Top 100
 ---
 
 ## Setup
----
+
 ### First clone the github repo then do the following depending on comfortablibity with pip or uv
 
 ---
