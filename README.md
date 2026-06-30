@@ -18,7 +18,7 @@
     ↓
 [STEP 6] Final Rank + Reasoning
     ↓
-Top 100 with per-candidate reasoning
+Top 100 
 ```
 
 ## Key Design Decisions
