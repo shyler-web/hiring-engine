@@ -1,3 +1,7 @@
+# Github Video for reference
+![Github guide for the ranking pipeline](https://github.com/user-attachments/assets/e4874001-0dec-4278-a482-23c9af6746b6)
+
+---
 # Candidate Ranker — Intelligent Candidate Discovery & Ranking Challenge
  Hybrid retrieval pipeline for large-scale candidate ranking on CPU.
 
@@ -28,10 +32,18 @@ Top 100
 - **bm25s** — Scipy-backed sparse retrieval, significantly faster than pure Python BM25
 - **RRF fusion** — Ordinal rank fusion avoids score normalization across incompatible scales
 - **INT8 ONNX reranker** — mxbai-rerank-xsmall-v1 exported via torch.onnx and quantized with onnxruntime.quantization. ~3x faster on CPU with minimal accuracy loss
-- **Structured signals** — Cross-encoder scores text fit; multipliers adjust for YoE fit, notice period, location, GitHub activity, and career quality (FAANG/product vs consulting). All signal weights derived from actual dataset percentile statistics
+- **Structured signals** — multipliers adjust for YoE fit, notice period, location, GitHub activity, and career quality (FAANG/product vs consulting). All signal weights derived from actual dataset percentile statistics
 ---
 
 ## Setup
+---
+
+### Step1:Clone the github repo 
+### Step2:Place the candidates.jsonl.gz file at the project root not doing so would throw error
+### Step3:Intall dependencies depending on whether using pip or uv through the given commands
+### Step4:Run the command for ranking(artifacts are already commited no need to do precompute)
+
+---
 
 ### Option A — pip (verified in sandbox)
 ```bash
@@ -67,8 +79,14 @@ Completes in ~160 seconds on 16-core CPU . Zero network calls.
 ---
 
 ## Validate Output
+### With pip
 ```bash
 python scripts/validate_submission.py team_InferenceEngine.csv
+```
+
+### With uv
+```bash
+uv run python scripts/validate_submission.py team_InferenceEngine.csv
 ```
 
 ---
@@ -117,7 +135,7 @@ uv run python scripts/export_onnx.py
 
 | Constraint | Limit | Actual |
 |---|---|---|
-| Runtime | ≤ 5 minutes | ~140 seconds |
+| Runtime | ≤ 5 minutes | ~160 seconds |
 | Memory | ≤ 16 GB RAM | ~1.8 GB peak |
 | GPU | CPU only | Disabled via CUDA_VISIBLE_DEVICES="" |
 | Network | Off during ranking | Zero external calls |
@@ -127,3 +145,75 @@ uv run python scripts/export_onnx.py
 - OS: Ubuntu 24.04 LTS (WSL2 on Windows)
 - Hardware: HP Victus, 16-core CPU, 16GB RAM
 - ONNX inference: 12 intra-op threads + 2 inter-op threads
+
+# Repository Structure
+
+```text
+hiring-engine/
+├── artifacts/
+│   ├── bm25_index/
+│   │   ├── data.csc.index.npy
+│   │   ├── indices.csc.index.npy
+│   │   ├── indptr.csc.index.npy
+│   │   ├── params.index.json
+│   │   └── vocab.index.json
+│   ├── candidate_ids.npy
+│   ├── embeddings.npy
+│   ├── jd_embedding.npy
+│   ├── jd_query_tokens.pkl
+│   ├── jd_templates_enhanced.pkl
+│   ├── jd_templates.pkl
+│   ├── reranker_optimum/
+│   │   ├── added_tokens.json
+│   │   ├── config.json
+│   │   ├── model_int8.onnx
+│   │   ├── special_tokens_map.json
+│   │   ├── tokenizer_config.json
+│   │   └── tokenizer.json
+│   └── skill_duration_percentiles.pkl
+├── .gitignore
+├── .python-version
+├── precompute.py
+├── pyproject.toml
+├── rank.py
+├── README.md
+├── sample_artifacts/
+│   ├── bm25_index/
+│   │   ├── data.csc.index.npy
+│   │   ├── indices.csc.index.npy
+│   │   ├── indptr.csc.index.npy
+│   │   ├── params.index.json
+│   │   └── vocab.index.json
+│   ├── candidate_ids.npy
+│   ├── embeddings.npy
+│   ├── jd_embedding.npy
+│   ├── jd_query_tokens.pkl
+│   ├── jd_templates_enhanced.pkl
+│   ├── jd_templates.pkl
+│   ├── reranker_optimum/
+│   │   ├── added_tokens.json
+│   │   ├── config.json
+│   │   ├── model_int8.onnx
+│   │   ├── special_tokens_map.json
+│   │   ├── tokenizer_config.json
+│   │   └── tokenizer.json
+│   └── skill_duration_percentiles.pkl
+├── sample_candidates.jsonl
+├── scripts/
+│   ├── analyze_jd_templates.py
+│   ├── build_template_summaries.py
+│   ├── compute_skill_duration_percentiles.py
+│   ├── export_onnx.py
+│   └── validate_submission.py
+├── src/
+│   ├── __init__.py
+│   ├── candidate_doc.py
+│   ├── filters.py
+│   ├── reasoning.py
+│   ├── reranker.py
+│   ├── retrieval.py
+│   └── signals.py
+├── submission_metadata_template.yaml
+├── team_InferenceEngine.csv
+├── tree_output.txt
+└── uv.lock
