@@ -36,8 +36,8 @@ Top 100
 
 ### Step1:Clone the github repo 
 ### Step2:Place the camdidates.jsonl.gz file at the project root not doing so would throw error
-### Intall dependencies depending on whether using pip or uv through the given commands
-### Run the command for ranking
+### Step3:Intall dependencies depending on whether using pip or uv through the given commands
+### Step4:Run the command for ranking(artifacts are already commited no need to do precompute)
 
 ---
 
