@@ -32,6 +32,7 @@ Top 100
 ---
 
 ## Setup
+### First clone the github repo
 
 ### Option A — pip (verified in sandbox)
 ```bash
