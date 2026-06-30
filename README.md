@@ -26,7 +26,7 @@ Top 100 with per-candidate reasoning
 ## Key Design Decisions
 
 - **Honeypot detection** — Pre-filters impossible profiles (timeline contradictions, fictional companies, impossible skill durations) before they contaminate retrieval
-- **nomic-embed-text-v1.5** — 8192 token window avoids chunking full candidate profiles
+- **nomic-embed-text-v1.5** — 8192 token window avoids chunking full candidate profiles and Job description
 - **bm25s** — Scipy-backed sparse retrieval, significantly faster than pure Python BM25
 - **RRF fusion** — Ordinal rank fusion avoids score normalization across incompatible scales
 - **INT8 ONNX reranker** — mxbai-rerank-xsmall-v1 exported via torch.onnx and quantized with onnxruntime.quantization. ~3x faster on CPU with minimal accuracy loss
