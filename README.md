@@ -1,3 +1,8 @@
+# Github Video for reference
+https://github.com/user-attachments/assets/e4874001-0dec-4278-a482-23c9af6746b6
+[Github guide for the entire pipeline](https://github.com/user-attachments/assets/e4874001-0dec-4278-a482-23c9af6746b6)
+
+---
 # Candidate Ranker — Intelligent Candidate Discovery & Ranking Challenge
  Hybrid retrieval pipeline for large-scale candidate ranking on CPU.
 
@@ -5,10 +10,6 @@
 
 ```
 100K candidates
-
-https://github.com/user-attachments/assets/e4874001-0dec-4278-a482-23c9af6746b6
-
-
     ↓
 [Pre-filter] Honeypot detection + hard business rules → ~5.5K survivors
     ↓
