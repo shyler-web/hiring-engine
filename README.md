@@ -1,33 +1,36 @@
 # Candidate Ranker — Intelligent Candidate Discovery & Ranking Challenge
-
-Two-stage hybrid retrieval pipeline for large-scale candidate ranking on CPU.
+ Hybrid retrieval pipeline for large-scale candidate ranking on CPU.
 
 ## Architecture
 
 ```
 100K candidates
     ↓
-[Pre-filter] Honeypot detection + hard business rules → ~5-8K survivors
+[Pre-filter] Honeypot detection + hard business rules → ~5.5K survivors
     ↓
-[Stage 1] BM25 (bm25s) + Semantic (nomic-embed-text-v1.5) fused via RRF → top 500
+[STEP 1] Candidate Document Builder
     ↓
-[Stage 2] Cross-encoder reranking (mxbai-rerank-xsmall-v1, INT8 ONNX) → scored top 500
+[STEP 2] Offline Precomputation
+    ↓       
+[Stage 3] BM25 (bm25s) + Semantic (nomic-embed-text-v1.5) fused via RRF → top 500
     ↓
-[Stage 3] Structured signal scoring (YoE fit, notice period, location, GitHub, career quality)
+[Stage 4] Cross-encoder reranking (mxbai-rerank-xsmall-v1, INT8 ONNX) → scored top 500
+    ↓
+[Stage 5] Structured signal scoring (YoE fit, notice period, location, GitHub, career quality)
+    ↓
+[STEP 6] Final Rank + Reasoning
     ↓
 Top 100 with per-candidate reasoning
 ```
 
 ## Key Design Decisions
 
+- **Honeypot detection** — Pre-filters impossible profiles (timeline contradictions, fictional companies, impossible skill durations) before they contaminate retrieval
 - **nomic-embed-text-v1.5** — 8192 token window avoids chunking full candidate profiles
 - **bm25s** — Scipy-backed sparse retrieval, significantly faster than pure Python BM25
 - **RRF fusion** — Ordinal rank fusion avoids score normalization across incompatible scales
 - **INT8 ONNX reranker** — mxbai-rerank-xsmall-v1 exported via torch.onnx and quantized with onnxruntime.quantization. ~3x faster on CPU with minimal accuracy loss
-- **Structured signals** — Cross-encoder scores text fit; multipliers adjust for YoE fit, notice period, location, GitHub activity, and career quality (FAANG/product vs consulting)
-- **Honeypot detection** — Pre-filters impossible profiles (timeline contradictions, fictional companies, impossible skill durations) before they contaminate retrieval
-- **Calibrated thresholds** — All signal weights derived from actual dataset percentile statistics
-
+- **Structured signals** — Cross-encoder scores text fit; multipliers adjust for YoE fit, notice period, location, GitHub activity, and career quality (FAANG/product vs consulting). All signal weights derived from actual dataset percentile statistics
 ---
 
 ## Setup
