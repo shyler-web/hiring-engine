@@ -131,7 +131,7 @@ uv run python scripts/export_onnx.py
 
 | Constraint | Limit | Actual |
 |---|---|---|
-| Runtime | ≤ 5 minutes | ~140 seconds |
+| Runtime | ≤ 5 minutes | ~160 seconds |
 | Memory | ≤ 16 GB RAM | ~1.8 GB peak |
 | GPU | CPU only | Disabled via CUDA_VISIBLE_DEVICES="" |
 | Network | Off during ranking | Zero external calls |
@@ -141,3 +141,33 @@ uv run python scripts/export_onnx.py
 - OS: Ubuntu 24.04 LTS (WSL2 on Windows)
 - Hardware: HP Victus, 16-core CPU, 16GB RAM
 - ONNX inference: 12 intra-op threads + 2 inter-op threads
+
+## Project Structure
+
+```text
+hiring-engine/
+├── README.md
+├── pyproject.toml
+├── uv.lock
+├── rank.py
+├── precompute.py
+├── candidates.jsonl.gz
+├── sample_candidates.jsonl
+├── team_InferenceEngine.csv
+├── team_InferenceEngine_submission_sample.csv
+├── sample_artifacts/
+│   ├── bm25_index/
+│   ├── embeddings/
+│   ├── jd_templates.pkl
+│   ├── jd_templates_enhanced.pkl
+│   ├── skill_duration_percentiles.pkl
+│   └── reranker/
+├── scripts/
+│   ├── analyze_jd_templates.py
+│   ├── build_template_summaries.py
+│   ├── compute_skill_duration_percentiles.py
+│   ├── export_onnx.py
+│   └── validate_submission.py
+└── notebooks/
+    └── sandbox.ipynb
+```
