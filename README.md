@@ -10,7 +10,7 @@
     ↓
 [STEP 1] Candidate Document Builder
     ↓       
-[Stage 2] BM25 (bm25s) + Semantic (nomic-embed-text-v1.5) fused via RRF → top 500
+[Stage 2] BM25 (bm25s) + Semantic (nomic-embed-text-v1.5) fused via RRF → top 2000
     ↓
 [Stage 4] Cross-encoder reranking (mxbai-rerank-xsmall-v1, INT8 ONNX) → scored top 500
     ↓
