@@ -67,8 +67,14 @@ Completes in ~160 seconds on 16-core CPU . Zero network calls.
 ---
 
 ## Validate Output
+### With pip
 ```bash
 python scripts/validate_submission.py team_InferenceEngine.csv
+```
+
+### With uv
+```bash
+uv run python scripts/validate_submission.py team_InferenceEngine.csv
 ```
 
 ---
