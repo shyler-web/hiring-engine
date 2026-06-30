@@ -28,7 +28,7 @@ Top 100
 - **bm25s** — Scipy-backed sparse retrieval, significantly faster than pure Python BM25
 - **RRF fusion** — Ordinal rank fusion avoids score normalization across incompatible scales
 - **INT8 ONNX reranker** — mxbai-rerank-xsmall-v1 exported via torch.onnx and quantized with onnxruntime.quantization. ~3x faster on CPU with minimal accuracy loss
-- **Structured signals** — Cross-encoder scores text fit; multipliers adjust for YoE fit, notice period, location, GitHub activity, and career quality (FAANG/product vs consulting). All signal weights derived from actual dataset percentile statistics
+- **Structured signals** — multipliers adjust for YoE fit, notice period, location, GitHub activity, and career quality (FAANG/product vs consulting). All signal weights derived from actual dataset percentile statistics
 ---
 
 ## Setup
